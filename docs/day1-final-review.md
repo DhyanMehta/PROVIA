@@ -3,6 +3,65 @@
 Verified on 2026-10-22 in the existing repository, on branch `main`. Baseline was clean
 at `599bccb`, following `19d0085` and `79b920d`. No restart, frontend, or Day 2 work.
 
+## Development readiness reassessment — 2026-10-23
+
+Repository review at `cca07df` found no technical dependency requiring either remaining
+external item to be resolved before implementing the Day 2 backend modules. This
+reassessment separates backend development readiness from external integration and
+production readiness; it does not resolve or waive either outstanding verification item.
+
+| Readiness area | Status | Scope / condition |
+| --- | --- | --- |
+| Core backend implementation | PASS | Existing evidence: 155 passing tests, including 17 PostgreSQL integration tests; migration0003 and Ruff verified |
+| External integration readiness | PARTIALLY BLOCKED | Real Clerk session verification and verified Indian nutrition data remain outstanding |
+| Day 2 backend development readiness | YES | Workouts, water, daily activity, sleep and progress analytics can be implemented and tested using the existing foundation |
+| Frontend authentication production readiness | BLOCKED | Until real Clerk session verification with an actual authenticated client |
+| Indian food catalog coverage | BLOCKED | Until verified, legally reusable data is available and approved for import |
+
+### Technical dependency assessment
+
+The current `services/api/app/db/models.py` already defines Exercise, WorkoutPlan,
+WorkoutPlanDay, PlannedExercise, WorkoutSession, WorkoutSet, WaterLog, DailyActivity
+and SleepSession. Their foreign keys refer to users and workout/exercise records,
+not the Indian food catalog or external food APIs. Their feature routes are not yet
+registered in `app/api/v1/router.py`; existing tables are a foundation, not evidence
+that Day 2 APIs are implemented or verified.
+
+| Day 2 module | Backend dependencies | Effect of the two external items |
+| --- | --- | --- |
+| Workouts | User ownership, exercise/plan/session/set models, database transactions | Neither an Indian dataset nor a real client session is required to implement and test the module |
+| Water tracking | User ownership, WaterLog, timestamps and quantity validation | No food-provider dependency; authentication can use the existing test harness |
+| Daily activity | User ownership, DailyActivity, local dates and source handling | No food-provider dependency; client ingestion can be tested with controlled inputs |
+| Sleep tracking | User ownership, SleepSession, timezone/duration validation | No food-provider dependency; real device/client validation remains a later integration concern |
+| Progress analytics | Recorded weights, goals, workouts, water, activity and sleep; optional stored meal snapshots | Aggregation can be developed with controlled records; nutrition-specific coverage remains limited by available data |
+
+`app/core/auth.py` supplies CurrentUser through signature-verified identity resolution;
+`app/db/dependencies.py` supplies transaction-scoped sessions. These contracts can be
+reused without changing production authentication. The authenticated PostgreSQL fixture
+in `tests/integration/test_postgres.py` signs local RSA tokens and supplies controlled
+JWKS to the real verifier. This supports endpoint and cross-user isolation tests without
+a mobile client; it is not proof of real Clerk session compatibility. Food adapters are
+initialized separately in `app/main.py`, and the tracking models do not call them.
+
+### Remaining risks and verification gates
+
+- Real Clerk issuer, audience/authorized-party alignment and actual session behavior
+  still require end-to-end verification before frontend authentication is considered
+  production-ready. Day 2 must retain authenticated ownership checks and add isolation
+  tests; no authentication bypass is justified by this reassessment.
+- Indian-food nutrition coverage remains unavailable. Analytics must preserve unknown
+  nutrient values, distinguish missing logs from zero consumption, and avoid claims of
+  comprehensive dietary coverage. Synthetic test records cannot become verified seeds.
+- Day 2 still needs its own API design, implementation, constraints and tests. Timezone
+  boundaries, activity-source deduplication, sleep overlap rules and progress definitions
+  require explicit decisions. Existing model/schema tests do not establish those features.
+- Historical nutrition analytics retain the documented pre-0003 activation-history gap
+  and profile-timezone reinterpretation policy. These limits must remain visible.
+
+This was a documentation-only dependency review. The previously recorded tests, Ruff
+and migration checks were not rerun, and their dates/evidence below are preserved.
+No application code or migrations were changed, and no Day 2 implementation was started.
+
 ## Results
 
 | Component | Status | Evidence / limits |
@@ -135,7 +194,8 @@ recipe yield calculations or retries. Authentication key rotation is tested with
 local keys and mocked JWKS; unknown-key refreshes respect PyJWT's30-second cooldown.
 All actual-session behavior remains unverified until a real client session is tested
 locally. Verified Indian data coverage also remains unavailable. These external/data
-limits prevent marking the entire readiness checklist complete despite passing backend
-tests. Day2 has not been started.
+limits keep external integration readiness partially blocked, but do not technically
+prevent Day 2 backend development, as assessed above. Day 2 has not been started.
 
-PROVIA DAY 1 FINAL REVIEW — BLOCKED, READY FOR DAY 2: NO.
+PROVIA DAY 1 CORE BACKEND — PASS; EXTERNAL INTEGRATION READINESS — PARTIALLY BLOCKED;
+READY FOR DAY 2 BACKEND DEVELOPMENT: YES.
