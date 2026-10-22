@@ -1,11 +1,12 @@
 """Environment-based application settings; no external services are initialized."""
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,7 +31,14 @@ class Settings(BaseSettings):
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_jwks_url: str | None = None
+    auth_authorized_parties: list[str] = ["http://localhost:5173"]
+    auth_require_authorized_party: bool = False
+    nutrition_min_daily_calories: Decimal = Field(default=Decimal("1500"), ge=1200, le=5000)
     usda_api_key: SecretStr | None = None
+    food_http_timeout_seconds: float = Field(default=5, gt=0, le=30)
+    food_provider_cache_seconds: int = Field(default=300, ge=0, le=3600)
+    food_provider_min_interval_seconds: float = Field(default=6, ge=0, le=60)
+    off_user_agent: str = "PROVIA/0.1.0 (local development)"
     r2_endpoint_url: str | None = None
     r2_access_key_id: SecretStr | None = None
     r2_secret_access_key: SecretStr | None = None
@@ -47,7 +55,7 @@ class Settings(BaseSettings):
             raise ValueError("API_V1_PREFIX must be an absolute path without a trailing slash")
         return value
 
-    @field_validator("cors_origins")
+    @field_validator("cors_origins", "auth_authorized_parties")
     @classmethod
     def validate_origins(cls, values: list[str]) -> list[str]:
         for value in values:
@@ -67,6 +75,15 @@ class Settings(BaseSettings):
             # Accessing port also validates malformed port numbers.
             _ = parsed.port
         return values
+
+    @property
+    def resolved_jwks_url(self) -> str | None:
+        if self.auth_jwks_url:
+            return self.auth_jwks_url
+        issuer = urlsplit(self.auth_issuer or "")
+        if issuer.scheme == "https" and (issuer.hostname or "").endswith(".clerk.accounts.dev"):
+            return self.auth_issuer.rstrip("/") + "/.well-known/jwks.json"
+        return None
 
 
 @lru_cache

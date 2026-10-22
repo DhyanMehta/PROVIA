@@ -48,6 +48,9 @@ def configure_logging(settings: Settings) -> None:
     app_logger.addHandler(handler)
     # Uvicorn's default access log contains raw paths and query strings.
     logging.getLogger("uvicorn.access").disabled = True
+    # Provider request URLs may contain API keys; never emit transport debug logs.
+    logging.getLogger("httpx").disabled = True
+    logging.getLogger("httpcore").disabled = True
 
 
 class RequestLoggingMiddleware:

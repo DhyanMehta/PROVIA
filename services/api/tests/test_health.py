@@ -28,4 +28,6 @@ def test_readiness(client) -> None:
 def test_openapi(client) -> None:
     response = client.get("/openapi.json")
     assert response.status_code == 200
-    assert set(response.json()["paths"]) == {"/api/v1/health", "/api/v1/health/ready"}
+    assert {"/api/v1/health", "/api/v1/health/ready", "/api/v1/health/db"} <= set(
+        response.json()["paths"]
+    )
