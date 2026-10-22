@@ -1,8 +1,16 @@
-from sqlalchemy import or_, select, tuple_
+from sqlalchemy import case, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import FitnessGoal, Food, FoodPortion, MealLog, UserProfile
+from app.db.models import (
+    FitnessGoal,
+    Food,
+    FoodPortion,
+    GoalTransition,
+    MealLog,
+    Recipe,
+    UserProfile,
+)
 
 
 class NutritionRepository:
@@ -30,7 +38,10 @@ class NutritionRepository:
         )
         if source:
             statement = statement.where(Food.source == source)
-        return self.session.scalars(statement.order_by(Food.name, Food.id).limit(20)).all()
+        priority = case((Food.source == "indian_curated", 0), (Food.source == "custom", 1), else_=2)
+        return self.session.scalars(
+            statement.order_by(priority, Food.name, Food.id).limit(20)
+        ).all()
 
     def import_foods(self, foods):
         # Batch import one bounded provider result, avoiding per-food queries.
@@ -62,6 +73,28 @@ class NutritionRepository:
             select(FitnessGoal).where(
                 FitnessGoal.user_id == user_id, FitnessGoal.status == "active"
             )
+        )
+
+    def goal_at(self, user_id, end):
+        transition = self.session.scalar(
+            select(GoalTransition)
+            .where(GoalTransition.user_id == user_id, GoalTransition.effective_at < end)
+            .order_by(GoalTransition.effective_at.desc())
+            .limit(1)
+        )
+        if transition is None or transition.goal_id is None:
+            return None
+        return self.session.scalar(
+            select(FitnessGoal).where(
+                FitnessGoal.user_id == user_id, FitnessGoal.id == transition.goal_id
+            )
+        )
+
+    def recipe(self, user_id, recipe_id):
+        return self.session.scalar(
+            select(Recipe)
+            .where(Recipe.user_id == user_id, Recipe.id == recipe_id)
+            .options(selectinload(Recipe.ingredients))
         )
 
     def meal(self, user_id, meal_id, lock=False):

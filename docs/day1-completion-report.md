@@ -1,5 +1,10 @@
 # PROVIA Day1 completion report
 
+This is the original implementation evidence. The subsequent hardening changes and
+latest statuses are recorded in [Day1 final review](day1-final-review.md). Migration0003
+resolves historical target selection and adds measured-yield recipes; the original
+counts and limitations below describe the earlier verification run.
+
 Verification date:2026-10-22. Work resumed in the existing repository. No frontend,
 AI, or Day2 feature APIs were added. Existing local credentials were used without
 copying their values into source or this report.

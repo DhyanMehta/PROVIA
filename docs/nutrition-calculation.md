@@ -67,5 +67,38 @@ again from the total calorie budget. Provider energy may differ from4/4/9 equiva
 the dashboard retains reported total energy rather than replacing it with macro sums.
 
 Without a goal, consumed totals remain available while targets and remaining values
-are null. Historical dates retain meal facts but compare against the current active
-goal; historical effective-date target selection is not yet implemented.
+are null. Historical dates select the last transition before local end-of-day; the
+last same-day change wins. Pauses are explicit null transitions. Prior snapshot
+values remain immutable. See [API policy](api-endpoints.md) for timezone boundaries
+and the conservative migration policy for unknown pre-0003 activation history.
+
+
+## Explicit weight recalculation
+
+Logging a measurement changes neither current targets nor profile weight. Authenticated
+weight-log goal-preview reuses the active goal's target weight and deficit with the
+selected measured weight. apply-goal confirms against the preview's base goal ID and
+creates a new snapshot/activation; stale confirmations return409. Measurement timestamps
+are historical facts, not backdated target activation requests.
+
+## Recipe nutrition
+
+For each nutrient, sum `ingredient_per_100g * actual_ingredient_grams / 100` over all
+ingredients, including explicitly supplied oils/ghee. Then calculate
+`total_recipe_nutrient / measured_final_yield_g * 100`. Ingredient contributions are
+stored to8 decimal places (exact for supported input precision); only the final
+per-100-g food value is rounded to0.001. Decimal places describe storage resolution,
+not laboratory certainty. Clients should present sensible display precision.
+
+Yield is required, positive, at most100000g, and never inferred from raw ingredient
+weights. No retention factors, cooking losses, missing ingredients or densities are
+invented. Any unknown ingredient contribution makes that nutrient unknown throughout
+the recipe and sets incomplete=true. Use custom ingredient foods for user-provided
+values; these are not labeled independently verified. Recipe portions are explicit
+measured grams no larger than the final yield. Recipes are immutable; changes create
+new recipes/food IDs. Existing meal snapshots remain unchanged.
+
+USDA Foundation energy normalization prefers nutrient2048 (specific Atwater factors),
+then2047 (general factors), then1008 (legacy), using only supplied kcal values. It does
+not sum alternate energy estimates or derive missing food energy from macros.
+[USDA Foundation documentation](https://fdc.nal.usda.gov/Foundation_Foods_Documentation/).

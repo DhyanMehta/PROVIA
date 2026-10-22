@@ -4,6 +4,7 @@ from app.core.exceptions import AppError
 from app.db.models import FitnessGoal, WeightLog
 from app.modules.nutrition.targets import calculate_targets
 from app.modules.profiles.repository import ProfileRepository
+from app.modules.profiles.schemas import GoalPatch
 
 
 class ProfileService:
@@ -34,7 +35,7 @@ class ProfileService:
                 self.minimum_calories,
             )
             self.repository.pause_active(user_id)
-            self.repository.save(
+            self.save_goal(
                 FitnessGoal(
                     user_id=user_id,
                     goal_type=active.goal_type,
@@ -68,7 +69,7 @@ class ProfileService:
         )
         if data.status == "active":
             self.repository.pause_active(user_id)
-        return self.repository.save(
+        return self.save_goal(
             FitnessGoal(
                 user_id=user_id,
                 goal_type=data.goal_type,
@@ -99,7 +100,8 @@ class ProfileService:
                 self.repository.pause_active(user_id)
             elif goal.status == "active":
                 goal.status = "paused"
-            return self.repository.save(
+                self.repository.record_transition(user_id, None)
+            return self.save_goal(
                 FitnessGoal(
                     user_id=user_id,
                     goal_type=data.goal_type or goal.goal_type,
@@ -108,6 +110,7 @@ class ProfileService:
                     **calculated,
                 )
             )
+        was_active = goal.status == "active"
         if data.status == "active":
             if not goal.calculation_method:
                 raise AppError(
@@ -125,7 +128,50 @@ class ProfileService:
             self.repository.pause_active(user_id, except_id=goal_id)
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(goal, key, value)
-        return self.repository.save(goal)
+        saved = self.repository.save(goal)
+        if data.status == "active" and not was_active:
+            self.repository.record_transition(user_id, saved.id)
+        elif was_active and saved.status != "active":
+            self.repository.record_transition(user_id, None)
+        return saved
 
     def add_weight(self, user_id, data):
         return self.repository.save(WeightLog(user_id=user_id, **data.model_dump()))
+
+    def save_goal(self, goal):
+        saved = self.repository.save(goal)
+        if saved.status == "active":
+            self.repository.record_transition(saved.user_id, saved.id)
+        return saved
+
+    def weight_preview(self, user_id, weight_id):
+        weight = self.repository.weight(user_id, weight_id)
+        if weight is None:
+            raise AppError("RESOURCE_NOT_FOUND", "Weight log was not found", 404)
+        goal = self.repository.active_goal(user_id)
+        if goal is None or goal.target_weight_kg is None or goal.selected_deficit_kcal is None:
+            raise AppError(
+                "CALCULATION_INPUTS_REQUIRED",
+                "Create a calculated goal before using a weight log",
+                422,
+            )
+        values = calculate_targets(
+            weight.weight_kg,
+            goal.target_weight_kg,
+            goal.selected_deficit_kcal,
+            self.minimum_calories,
+        )
+        return {**values, "base_goal_id": goal.id, "weight_log_id": weight.id}
+
+    def apply_weight(self, user_id, weight_id, expected_goal_id):
+        self.repository.lock_user(user_id)
+        preview = self.weight_preview(user_id, weight_id)
+        if preview["base_goal_id"] != expected_goal_id:
+            raise AppError(
+                "GOAL_CHANGED", "The active goal changed; preview again before confirming", 409
+            )
+        return self.update_goal(
+            user_id,
+            expected_goal_id,
+            GoalPatch(current_weight_kg=preview["current_weight_kg_snapshot"]),
+        )

@@ -1,0 +1,22 @@
+requested_food,possible_aliases,verification_needed
+Paneer,,Source rights and exact milk/fat/preparation
+Chapati,Roti;Phulka,Recipe and measured portion; aliases only for equivalent preparation
+Roti,Chapati,Flour recipe and measured portion
+Phulka,Chapati,Recipe and measured portion
+Rice,,Separate raw/cooked varieties and measured yield
+Dal,,Specify pulse recipe oil and final yield
+Khichdi,,Recipe ingredients oil and final yield
+Poha,,Recipe ingredients oil and final yield
+Upma,,Recipe ingredients oil and final yield
+Thepla,,Recipe ingredients oil and final yield
+Idli,,Recipe fermentation ingredients and final yield
+Dosa,,Recipe batter oil and final yield
+Sabzi,,Specific vegetable recipe oil and final yield
+Curd,Dahi,Milk/fat source and measured gram serving
+Buttermilk,Chaas,Recipe and gram weight; no assumed liquid density
+Rajma,,Separate raw/cooked beans and prepared curry
+Chole,Chana,Separate raw/cooked chickpeas and prepared curry
+Dhokla,,Recipe ingredients and final yield
+Besan chilla,Cheela,Recipe ingredients oil and final yield
+Oats,,Specific raw/processed/cooked record
+Eggs,,Preparation and edible portion

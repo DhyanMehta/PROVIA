@@ -1,0 +1,17 @@
+[
+  {
+    "source_food_id": "REPLACE_WITH_STABLE_SOURCE_ID",
+    "name": "REPLACE_WITH_EXACT_FOOD_AND_PREPARATION",
+    "food_kind": "unspecified",
+    "brand": null,
+    "aliases": [],
+    "source_url": null,
+    "license_name": null,
+    "calories_kcal": null,
+    "protein_g": null,
+    "carbs_g": null,
+    "fat_g": null,
+    "fiber_g": null,
+    "portions": []
+  }
+]

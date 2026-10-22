@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     usda_api_key: SecretStr | None = None
     food_http_timeout_seconds: float = Field(default=5, gt=0, le=30)
     food_provider_cache_seconds: int = Field(default=300, ge=0, le=3600)
+    food_provider_stale_seconds: int = Field(default=3600, ge=0, le=86400)
     food_provider_min_interval_seconds: float = Field(default=6, ge=0, le=60)
     off_user_agent: str = "PROVIA/0.1.0 (local development)"
     r2_endpoint_url: str | None = None

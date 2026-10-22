@@ -92,8 +92,9 @@ python -m uv run alembic current
 python -m uv run alembic check
 ```
 
-Revision `0001_initial` creates all 17 MVP tables; `0002` adds calculated goal snapshots
-and curated-food metadata/indexes without dropping existing data. The application never creates
+Revision `0001_initial` creates the original17 MVP tables; `0002` adds goal snapshots
+and curated-food metadata. `0003` adds goal transitions, recipes and recipe ingredients
+(20 application tables total), plus food classification, without dropping existing data. The application never creates
 or migrates tables automatically. Migrations reject pooled URLs. See
 [Neon's pooling documentation](https://neon.com/docs/connect/connection-pooling).
 Do not downgrade a database containing real data. Automated downgrade checks operate
@@ -138,6 +139,11 @@ with `items`, it replaces the entire item list and calculates fresh snapshots fr
 catalog. Catalog changes alone never alter historical meals. Daily totals use the user's
 IANA timezone (UTC before onboarding), including daylight-saving boundaries. A nutrient
 total is null when any included item has an unknown value; an empty day's totals are zero.
+Historical dashboards use the last goal transition before local day-end; same-day
+changes use the last transition. Pre-0003 activation history cannot be reconstructed
+reliably and is not fabricated. Weight logs require preview/confirmation to change goals.
+Private recipes require measured final yield and explicit ingredient quantities.
+
 Targets are calculated from current weight, target weight, and chosen deficit using
 the approved PROVIA formulas. Preview maintenance before choosing a deficit, then save
 through the authenticated goal API. Relevant input changes create new goal snapshots.
@@ -238,3 +244,21 @@ docs/
 [Verification report and remaining configuration](docs/day1-completion-report.md).
 The report distinguishes implementation, mocks, and real-service verification; this
 backend has not been demonstrated production-ready.
+
+
+## Final Day1 hardening
+
+[Final review](docs/day1-final-review.md) contains the latest test counts and blockers.
+See [API contracts](docs/api-endpoints.md) for historical targets, weight-log preview /
+confirmation, recipes and provider retry behavior. The finalized goal formulas are
+unchanged. [Catalog templates and import rules](services/api/data/README.md) include
+an unpopulated attribution template and the Indian-food research queue; no Indian
+nutrition coverage is claimed without licensed verified records.
+
+Open Food Facts text search remains on its documented legacy CGI endpoint: the newer
+product API does not provide equivalent plain-text search. Retries are bounded and
+spaced, Retry-After is respected, and local/USDA results remain usable on failure.
+Configure OFF_USER_AGENT with an application/version and real operator contact before
+public deployment. FOOD_PROVIDER_STALE_SECONDS defaults to3600; stale results are labeled.
+Clerk JWKS refreshes for unknown keys respect PyJWT's30-second cooldown; valid cached
+keys remain usable. Live Clerk authentication still needs an actual client session.

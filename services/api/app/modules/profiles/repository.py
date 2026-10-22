@@ -1,10 +1,11 @@
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.db.models import FitnessGoal, User, UserProfile, WeightLog
+from app.db.models import FitnessGoal, GoalTransition, User, UserProfile, WeightLog
 
 
 class ProfileRepository:
@@ -42,6 +43,22 @@ class ProfileRepository:
             select(FitnessGoal).where(
                 FitnessGoal.user_id == user_id, FitnessGoal.status == "active"
             )
+        )
+
+    def record_transition(self, user_id, goal_id):
+        # Caller holds the user lock. Clock time (not transaction-start time) preserves
+        # order even when a request waited for an earlier transaction to commit.
+        now = self.session.scalar(select(func.clock_timestamp()))
+        latest = self.session.scalar(
+            select(func.max(GoalTransition.effective_at)).where(GoalTransition.user_id == user_id)
+        )
+        if latest is not None and now <= latest:
+            now = latest + timedelta(microseconds=1)
+        self.save(GoalTransition(user_id=user_id, goal_id=goal_id, effective_at=now))
+
+    def weight(self, user_id, weight_id):
+        return self.session.scalar(
+            select(WeightLog).where(WeightLog.user_id == user_id, WeightLog.id == weight_id)
         )
 
     def goals(self, user_id: UUID, limit: int, offset: int):

@@ -22,9 +22,11 @@ class ProbeTransport(httpx.HTTPTransport):
         self.details = {}
 
     def handle_request(self, request):
+        self.details["attempts"] = self.details.get("attempts", 0) + 1
         try:
             response = super().handle_request(request)
             self.details["http_status"] = response.status_code
+            self.details.setdefault("http_statuses", []).append(response.status_code)
             return response
         except Exception as error:
             self.details["error_type"] = type(error).__name__
@@ -91,12 +93,17 @@ def main():
             report[name] = {
                 "status": "PASS",
                 "normalized_results": len(foods),
+                "results_with_calories": sum(food.calories_kcal is not None for food in foods),
                 "note": "Live adapter request; not an authenticated API end-to-end test",
             }
         except ProviderError as error:
-            report[name] = {"status": "FAIL", "note": str(error), **transport.details}
+            report[name] = {"status": "BLOCKED", "note": str(error), **transport.details}
         finally:
             transport.close()
+    report["open_food_facts_barcode"] = {
+        "status": "NOT RUN",
+        "note": "No barcode endpoint implemented",
+    }
     report["r2"] = {
         "status": "NOT RUN",
         "note": "Storage integration is not implemented; no storage operations performed",

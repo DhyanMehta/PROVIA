@@ -1,5 +1,5 @@
 # Database schema
-Revision: `0002` (after `0001_initial`). PostgreSQL only. 17 tables; UUID primary keys and timezone-aware timestamps. Numeric/Decimal is used for physical measurements and nutrition. Application-created timestamps and transaction timezone are UTC.
+Revision: `0003` (after `0002` and `0001_initial`). PostgreSQL only. 20 application tables; UUID primary keys and timezone-aware timestamps. Numeric/Decimal is used for physical measurements and nutrition. Application-created timestamps and transaction timezone are UTC.
 ## Integrity and lifecycle
 - Owned records refer to users; child records inherit ownership through their parent.
 - External catalogs are shared; custom foods/exercises have an owner. Catalog references use RESTRICT.
@@ -13,6 +13,20 @@ Revision: `0002` (after `0001_initial`). PostgreSQL only. 17 tables; UUID primar
 - ORM updated_at values refresh on ORM updates. Direct SQL maintenance must set updated_at explicitly.
 
 Migration0002 adds nullable calculation snapshots for legacy goals, widens calculated targets to Numeric(18,8), and adds curated source attribution, JSONB aliases and a GIN index. Legacy goals remain readable; activation requires new calculation inputs.
+
+
+Migration0003 adds goal_transitions, recipes and recipe_ingredients, plus foods.food_kind.
+Goal transitions are append-only in the application: unique(user_id,effective_at)
+orders activation and null-goal pause events. Goal foreign keys RESTRICT deletion of
+referenced snapshots. Consecutive transitions define non-overlapping half-open periods;
+no mutable valid_until column is needed. User locks serialize all writers. Migration
+seeds only the known active goal at migration time; older snapshots remain untouched
+and their unknown historical activation periods are not inferred.
+
+Recipes refer to a private custom food and its owner. Ingredients refer to immutable
+food IDs and store actual grams plus exact nutrient contributions. Recipe yield must
+be measured explicitly. Food-kind values distinguish unspecified, ingredient,
+prepared_dish and recipe. The original17 application tables remain intact.
 
 ## Tables
 
@@ -28,7 +42,7 @@ Migration0002 adds nullable calculation snapshots for legacy goals, widens calcu
 
 Constraints: `pk_users`, `uq_users_auth_provider_subject`.
 
-Indexes: .
+Indexes: none.
 
 ### daily_activity
 
@@ -49,7 +63,7 @@ Constraints: `ck_daily_activity_distance_nonnegative`, `ck_daily_activity_steps_
 
 - Check: `steps >= 0 AND steps <= 200000`
 
-Indexes: .
+Indexes: none.
 
 ### exercises
 
@@ -120,6 +134,7 @@ Indexes: `ix_fitness_goals_user_created`, `uq_fitness_goals_active_user`.
 | Column | PostgreSQL type | Nullable | Reference |
 | --- | --- | --- | --- |
 | name | VARCHAR(300) | False |  |
+| food_kind | VARCHAR(20) | False |  |
 | brand | VARCHAR(200) | True |  |
 | aliases | JSONB | False |  |
 | source_url | VARCHAR(1000) | True |  |
@@ -138,9 +153,11 @@ Indexes: `ix_fitness_goals_user_created`, `uq_fitness_goals_active_user`.
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 | updated_at | TIMESTAMP WITH TIME ZONE | False |  |
 
-Constraints: `ck_foods_curated_attribution`, `ck_foods_nutrients_nonnegative`, `ck_foods_ownership`, `ck_foods_serving_basis`, `ck_foods_source`, `fk_foods_created_by_user_id_users`, `pk_foods`, `uq_foods_source`.
+Constraints: `ck_foods_curated_attribution`, `ck_foods_food_kind`, `ck_foods_nutrients_nonnegative`, `ck_foods_ownership`, `ck_foods_serving_basis`, `ck_foods_source`, `fk_foods_created_by_user_id_users`, `pk_foods`, `uq_foods_source`.
 
 - Check: `source <> 'indian_curated' OR (source_url IS NOT NULL AND license_name IS NOT NULL AND verified_at IS NOT NULL)`
+
+- Check: `food_kind IN ('unspecified','ingredient','prepared_dish','recipe')`
 
 - Check: `calories_kcal >= 0 AND protein_g >= 0 AND carbs_g >= 0 AND fat_g >= 0 AND fiber_g >= 0`
 
@@ -213,7 +230,7 @@ Constraints: `ck_user_profiles_activity_level`, `ck_user_profiles_height_range`,
 
 - Check: `preferred_weight_unit IN ('kg','lb')`
 
-Indexes: .
+Indexes: none.
 
 ### water_logs
 
@@ -277,7 +294,21 @@ Constraints: `ck_food_portions_positive_grams`, `fk_food_portions_food_id_foods`
 
 - Check: `grams > 0`
 
-Indexes: .
+Indexes: none.
+
+### goal_transitions
+
+| Column | PostgreSQL type | Nullable | Reference |
+| --- | --- | --- | --- |
+| user_id | UUID | False | users.id (CASCADE) |
+| goal_id | UUID | True | fitness_goals.id (RESTRICT) |
+| effective_at | TIMESTAMP WITH TIME ZONE | False |  |
+| id | UUID | False |  |
+| created_at | TIMESTAMP WITH TIME ZONE | False |  |
+
+Constraints: `fk_goal_transitions_goal_id_fitness_goals`, `fk_goal_transitions_user_id_users`, `pk_goal_transitions`, `uq_goal_transitions_user_id`.
+
+Indexes: none.
 
 ### meal_items
 
@@ -302,6 +333,23 @@ Constraints: `ck_meal_items_positive_quantity`, `ck_meal_items_snapshots_nonnega
 
 Indexes: `ix_meal_items_food_id`, `ix_meal_items_meal_log_id`.
 
+### recipes
+
+| Column | PostgreSQL type | Nullable | Reference |
+| --- | --- | --- | --- |
+| food_id | UUID | False | foods.id (RESTRICT) |
+| user_id | UUID | False | users.id (RESTRICT) |
+| yield_g | NUMERIC(12, 3) | False |  |
+| incomplete | BOOLEAN | False |  |
+| id | UUID | False |  |
+| created_at | TIMESTAMP WITH TIME ZONE | False |  |
+
+Constraints: `ck_recipes_yield_range`, `fk_recipes_food_id_foods`, `fk_recipes_user_id_users`, `pk_recipes`, `uq_recipes_food_id`.
+
+- Check: `yield_g > 0 AND yield_g <= 100000`
+
+Indexes: `ix_recipes_user_id`.
+
 ### workout_plan_days
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -316,7 +364,7 @@ Constraints: `ck_workout_plan_days_day_range`, `fk_workout_plan_days_workout_pla
 
 - Check: `day_of_week BETWEEN 0 AND 6`
 
-Indexes: .
+Indexes: none.
 
 ### planned_exercises
 
@@ -335,6 +383,28 @@ Constraints: `ck_planned_exercises_targets`, `fk_planned_exercises_exercise_id_e
 - Check: `order_index >= 0 AND target_sets > 0 AND target_reps > 0`
 
 Indexes: `ix_planned_exercises_exercise_id`.
+
+### recipe_ingredients
+
+| Column | PostgreSQL type | Nullable | Reference |
+| --- | --- | --- | --- |
+| recipe_id | UUID | False | recipes.id (CASCADE) |
+| food_id | UUID | False | foods.id (RESTRICT) |
+| quantity_g | NUMERIC(12, 3) | False |  |
+| calories_kcal_snapshot | NUMERIC(20, 8) | True |  |
+| protein_g_snapshot | NUMERIC(20, 8) | True |  |
+| carbs_g_snapshot | NUMERIC(20, 8) | True |  |
+| fat_g_snapshot | NUMERIC(20, 8) | True |  |
+| fiber_g_snapshot | NUMERIC(20, 8) | True |  |
+| id | UUID | False |  |
+
+Constraints: `ck_recipe_ingredients_nutrients_nonnegative`, `ck_recipe_ingredients_quantity_range`, `fk_recipe_ingredients_food_id_foods`, `fk_recipe_ingredients_recipe_id_recipes`, `pk_recipe_ingredients`, `uq_recipe_ingredients_recipe_id`.
+
+- Check: `calories_kcal_snapshot >= 0 AND protein_g_snapshot >= 0 AND carbs_g_snapshot >= 0 AND fat_g_snapshot >= 0 AND fiber_g_snapshot >= 0`
+
+- Check: `quantity_g > 0 AND quantity_g <= 100000`
+
+Indexes: none.
 
 ### workout_sessions
 

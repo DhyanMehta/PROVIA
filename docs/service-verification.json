@@ -6,9 +6,9 @@
   "neon_direct": {
     "status": "PASS",
     "select_1": true,
-    "table_count": 18,
-    "revision": "0002",
-    "foreign_key_count": 20
+    "table_count": 21,
+    "revision": "0003",
+    "foreign_key_count": 26
   },
   "clerk_jwks": {
     "status": "PASS",
@@ -22,12 +22,18 @@
   "usda": {
     "status": "PASS",
     "normalized_results": 9,
+    "results_with_calories": 9,
     "note": "Live adapter request; not an authenticated API end-to-end test"
   },
   "open_food_facts": {
-    "status": "FAIL",
-    "note": "provider_unavailable",
-    "http_status": 503
+    "status": "PASS",
+    "normalized_results": 9,
+    "results_with_calories": 9,
+    "note": "Live adapter request; not an authenticated API end-to-end test"
+  },
+  "open_food_facts_barcode": {
+    "status": "NOT RUN",
+    "note": "No barcode endpoint implemented"
   },
   "r2": {
     "status": "NOT RUN",

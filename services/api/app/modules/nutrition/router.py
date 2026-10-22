@@ -20,12 +20,24 @@ from app.modules.nutrition.schemas import (
     MealCreate,
     MealOut,
     MealPatch,
+    RecipeCreate,
+    RecipeOut,
     SearchOut,
 )
 from app.modules.nutrition.service import NutritionService
 from app.modules.nutrition.targets import METHOD, calculate_targets, maintenance
 
 router = APIRouter(tags=["nutrition"])
+
+
+@router.post("/recipes", response_model=RecipeOut, status_code=201)
+def create_recipe(data: RecipeCreate, user: CurrentUser, session: DbSession):
+    return NutritionService(NutritionRepository(session)).create_recipe(user.id, data)
+
+
+@router.get("/recipes/{recipe_id}", response_model=RecipeOut)
+def recipe(recipe_id: UUID, user: CurrentUser, session: DbSession):
+    return NutritionService(NutritionRepository(session)).get_recipe(user.id, recipe_id)
 
 
 @router.post("/nutrition/calculate-maintenance", response_model=MaintenanceOut)

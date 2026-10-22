@@ -40,4 +40,10 @@ def load_catalog(path: Path) -> list[NormalizedFood]:
     records = TypeAdapter(list[CuratedRecord]).validate_python(json.loads(path.read_text("utf-8")))
     if len(records) > 5000 or len({row.source_food_id for row in records}) != len(records):
         raise ValueError("Use at most 5000 unique source IDs per file")
+    identities = {
+        (str(row.source_url), row.name.casefold(), (row.brand or "").casefold(), row.food_kind)
+        for row in records
+    }
+    if len(identities) != len(records):
+        raise ValueError("Duplicate name, brand, classification and source URL in catalog")
     return [record.normalized() for record in records]

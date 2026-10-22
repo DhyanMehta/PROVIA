@@ -49,6 +49,31 @@ def test_usda_mock_normalization():
     assert foods[0].source == "usda"
 
 
+@pytest.mark.parametrize(
+    "entries,expected",
+    [
+        ([(1008, 100), (2047, 110), (2048, 120)], "120"),
+        ([(2048, 120), (2047, 110), (1008, 100)], "120"),
+        ([(1008, 100), (2047, 110)], "110"),
+        ([(2048, -1), (2047, 110)], "110"),
+        ([(1008, 100)], "100"),
+        ([], None),
+    ],
+)
+def test_usda_foundation_energy_precedence(entries, expected):
+    food = USDAProvider.normalize(
+        {
+            "fdcId": 1,
+            "description": "Synthetic fixture",
+            "dataType": "Foundation",
+            "foodNutrients": [
+                {"nutrientId": key, "unitName": "KCAL", "value": value} for key, value in entries
+            ],
+        }
+    )
+    assert food.calories_kcal == (Decimal(expected) if expected is not None else None)
+
+
 def test_off_mock_normalization_and_portion():
     response = {
         "products": [
@@ -200,7 +225,7 @@ def test_daily_timezone_and_totals():
     repository = MagicMock()
     repository.profile.return_value = SimpleNamespace(timezone="Asia/Kolkata")
     repository.meals.return_value = []
-    repository.active_goal.return_value = None
+    repository.goal_at.return_value = None
     user_id = uuid4()
     summary = NutritionService(repository).daily(user_id, date(2026, 1, 1))
     repository.meals.assert_called_once_with(

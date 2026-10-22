@@ -7,6 +7,8 @@ from app.main import create_app
 
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch):
+    # HTTP retries are deterministic and never sleep or make real network requests in tests.
+    monkeypatch.setattr("app.integrations.foods.sleep", lambda seconds: None)
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
         monkeypatch.delenv(name, raising=False)

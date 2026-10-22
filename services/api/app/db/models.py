@@ -144,9 +144,24 @@ class WeightLog(Identity, Created, Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class GoalTransition(Identity, Created, Base):
+    """Append-only activation/pause events; null goal means no target in force."""
+
+    __tablename__ = "goal_transitions"
+    __table_args__ = (UniqueConstraint("user_id", "effective_at"),)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fitness_goals.id", ondelete="RESTRICT")
+    )
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Food(Identity, Created, Updated, Base):
     __tablename__ = "foods"
     __table_args__ = (
+        CheckConstraint(
+            "food_kind IN ('unspecified','ingredient','prepared_dish','recipe')", name="food_kind"
+        ),
         UniqueConstraint("source", "source_food_id"),
         CheckConstraint(
             "source IN ('custom','usda','open_food_facts','indian_curated')", name="source"
@@ -171,6 +186,9 @@ class Food(Identity, Created, Updated, Base):
         ),
     )
     name: Mapped[str] = mapped_column(String(300), index=True)
+    food_kind: Mapped[str] = mapped_column(
+        String(20), default="unspecified", server_default="unspecified"
+    )
     brand: Mapped[str | None] = mapped_column(String(200))
     aliases: Mapped[list[str]] = mapped_column(
         JSONB, default=list, server_default=text("'[]'::jsonb")
@@ -192,6 +210,43 @@ class Food(Identity, Created, Updated, Base):
     portions: Mapped[list["FoodPortion"]] = relationship(
         lazy="selectin", cascade="all, delete-orphan"
     )
+
+
+class Recipe(Identity, Created, Base):
+    __tablename__ = "recipes"
+    __table_args__ = (CheckConstraint("yield_g > 0 AND yield_g <= 100000", name="yield_range"),)
+    food_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("foods.id", ondelete="RESTRICT"), unique=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    yield_g: Mapped[Decimal] = mapped_column(Numeric(12, 3))
+    incomplete: Mapped[bool] = mapped_column(Boolean)
+    ingredients: Mapped[list["RecipeIngredient"]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan"
+    )
+
+
+class RecipeIngredient(Identity, Base):
+    __tablename__ = "recipe_ingredients"
+    __table_args__ = (
+        UniqueConstraint("recipe_id", "food_id"),
+        CheckConstraint("quantity_g > 0 AND quantity_g <= 100000", name="quantity_range"),
+        CheckConstraint(
+            "calories_kcal_snapshot >= 0 AND protein_g_snapshot >= 0 "
+            "AND carbs_g_snapshot >= 0 AND fat_g_snapshot >= 0 AND fiber_g_snapshot >= 0",
+            name="nutrients_nonnegative",
+        ),
+    )
+    recipe_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recipes.id", ondelete="CASCADE"))
+    food_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("foods.id", ondelete="RESTRICT"))
+    quantity_g: Mapped[Decimal] = mapped_column(Numeric(12, 3))
+    calories_kcal_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    protein_g_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    carbs_g_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    fat_g_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    fiber_g_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
 
 
 class FoodPortion(Identity, Created, Base):

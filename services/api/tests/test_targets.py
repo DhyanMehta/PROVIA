@@ -124,7 +124,7 @@ def test_remaining_budget_no_double_subtraction():
 def test_dashboard_no_goals_or_meals():
     repository = MagicMock()
     repository.profile.return_value = None
-    repository.active_goal.return_value = None
+    repository.goal_at.return_value = None
     repository.meals.return_value = []
     dashboard = NutritionService(repository).dashboard(uuid4(), date(2026, 1, 1))
     assert dashboard["calories"] == {"target": None, "consumed": D(0), "remaining": None}
@@ -152,7 +152,7 @@ def test_dashboard_requires_auth(client):
 
 def test_legacy_goal_cannot_bypass_calorie_safeguard():
     repo = MagicMock()
-    repo.goal.return_value = SimpleNamespace(calculation_method=None)
+    repo.goal.return_value = SimpleNamespace(calculation_method=None, status="paused")
     with pytest.raises(AppError) as error:
         ProfileService(repo).update_goal(uuid4(), uuid4(), GoalPatch(status="active"))
     assert error.value.code == "CALCULATION_INPUTS_REQUIRED"

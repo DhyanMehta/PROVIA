@@ -84,9 +84,9 @@ use NullPool. Engine creation remains lazy and connection URLs never enter app l
 goal creation, goal revisions, and profile weight changes. Goal snapshots preserve
 inputs and calculation version. Active mutations serialize through a user-row lock.
 Weight logs append measurements; PUT profile explicitly changes canonical current
-weight. Daily and dashboard share the same day aggregation and use the current active
-goal, including for historical date queries. Historical effective-date goal selection
-is a future feature. No exercise calorie adjustment is made.
+weight. Daily and dashboard share aggregation and select the last immutable goal transition
+before local day-end. Same-day changes use the last transition; pauses explicitly clear
+targets. Migration0003 seeds only known active state, without inventing past activations. No exercise calorie adjustment is made.
 
 Provider requests use process-local bounded query caches (128 entries, 300s), per-provider
 cooldowns (6s default), and Retry-After handling for HTTP429. These are per worker, not
@@ -117,3 +117,5 @@ No Redis, Celery, Docker, microservices, AI, or frontend was introduced.
 - [PyJWT usage and JWKS verification](https://pyjwt.readthedocs.io/en/stable/usage.html)
 - [USDA API guide](https://fdc.nal.usda.gov/api-guide/)
 - [Open Food Facts API](https://openfoodfacts.github.io/openfoodfacts-server/api/)
+
+Recipe/ingredient tables retain measured yield and ingredient nutrient snapshots. User-created recipes produce private foods consumed by the unchanged meal snapshot flow. See the final review and API documentation for confirmation and retry policies.

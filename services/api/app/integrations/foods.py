@@ -1,9 +1,11 @@
 """HTTP adapters: preserve unknown nutrients; accept only a known gram basis."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
+from random import uniform
 from threading import Lock
-from time import monotonic
+from time import monotonic, sleep
 from typing import Literal
 
 import httpx
@@ -15,7 +17,11 @@ NUTRIENTS = ("calories_kcal", "protein_g", "carbs_g", "fat_g", "fiber_g")
 
 
 class ProviderError(Exception):
-    """Safe error category only; never wrap provider URLs or bodies."""
+    """Safe category plus optional bounded stale results; no provider bodies/URLs."""
+
+    def __init__(self, code, cached_foods=None):
+        super().__init__(code)
+        self.cached_foods = cached_foods
 
 
 class NormalizedPortion(BaseModel):
@@ -25,6 +31,7 @@ class NormalizedPortion(BaseModel):
 
 class NormalizedFood(BaseModel):
     name: str
+    food_kind: str = "unspecified"
     brand: str | None = None
     source: Literal["usda", "open_food_facts", "indian_curated"]
     source_food_id: str
@@ -52,6 +59,8 @@ def nutrient(value) -> Decimal | None:
 
 
 class FoodProvider:
+    max_attempts = 1
+
     def __init__(self, settings: Settings, transport=None):
         self.settings = settings
         self.transport = transport
@@ -68,38 +77,96 @@ class FoodProvider:
             cached = self._cache.get(key)
             if cached and cached[0] > now:
                 return [food.model_copy(deep=True) for food in cached[1]]
-            if now < self._next_request_at:
-                raise ProviderError("rate_limited")
-            self._next_request_at = now + self.settings.food_provider_min_interval_seconds
-            result = self.fetch_search(query.strip())
+            try:
+                if now < self._next_request_at:
+                    raise ProviderError("rate_limited")
+                self._next_request_at = now + self.settings.food_provider_min_interval_seconds
+                result = self.fetch_search(query.strip())
+            except ProviderError as error:
+                if (
+                    cached
+                    and now <= cached[0] + self.settings.food_provider_stale_seconds
+                    and str(error)
+                    in {"rate_limited", "provider_unavailable", "network_failure", "timeout"}
+                ):
+                    raise ProviderError(
+                        str(error), [food.model_copy(deep=True) for food in cached[1]]
+                    ) from None
+                raise
             if len(self._cache) >= 128:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[key] = (now + self.settings.food_provider_cache_seconds, result)
             return [food.model_copy(deep=True) for food in result]
 
-    def fetch(self, url: str, params: dict) -> dict:
+    @staticmethod
+    def retry_after(value):
+        if not value:
+            return None
         try:
-            with httpx.Client(
-                timeout=self.settings.food_http_timeout_seconds,
-                transport=self.transport,
-                follow_redirects=False,
-                headers={"User-Agent": self.settings.off_user_agent},
-            ) as client:
-                response = client.get(url, params=params)
-                if response.status_code == 429:
-                    try:
-                        delay = max(1, min(float(response.headers.get("Retry-After", "60")), 3600))
-                    except ValueError:
-                        delay = 60
-                    self._next_request_at = monotonic() + delay
-                    raise ProviderError("rate_limited")
-                response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, dict):
-                    raise ValueError
-                return data
-        except (httpx.HTTPError, ValueError):
-            raise ProviderError("provider_unavailable") from None
+            delay = float(value)
+            if not Decimal(str(delay)).is_finite():
+                return None
+            return max(0, delay)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(value)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=UTC)
+                return max(0, (when - datetime.now(UTC)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+    def fetch(self, url: str, params: dict) -> dict:
+        with httpx.Client(
+            timeout=httpx.Timeout(
+                self.settings.food_http_timeout_seconds,
+                connect=min(5, self.settings.food_http_timeout_seconds),
+            ),
+            transport=self.transport,
+            follow_redirects=False,
+            headers={"User-Agent": self.settings.off_user_agent, "Accept": "application/json"},
+        ) as client:
+            for attempt in range(self.max_attempts):
+                retry_delay = None
+                try:
+                    self._next_request_at = max(
+                        self._next_request_at,
+                        monotonic() + self.settings.food_provider_min_interval_seconds,
+                    )
+                    response = client.get(url, params=params)
+                    status = response.status_code
+                    if status == 429 or status >= 500:
+                        category = "rate_limited" if status == 429 else "provider_unavailable"
+                        retry_delay = self.retry_after(response.headers.get("Retry-After"))
+                    elif status >= 300:
+                        category = (
+                            "invalid_endpoint"
+                            if status in {301, 302, 307, 308, 404, 410}
+                            else "invalid_request"
+                        )
+                        if status in {401, 403}:
+                            category = "access_denied"
+                        raise ProviderError(category)
+                    else:
+                        try:
+                            data = response.json()
+                        except ValueError:
+                            raise ProviderError("invalid_response") from None
+                        if not isinstance(data, dict):
+                            raise ProviderError("invalid_response")
+                        return data
+                except httpx.TimeoutException:
+                    category = "timeout"
+                except httpx.RequestError:
+                    category = "network_failure"
+                # Space attempts at least six seconds apart; bounded 6/12s backoff
+                # plus jitter, never sleep for a long Retry-After inside a request.
+                delay = max(6 * (2**attempt) + uniform(0, 0.5), retry_delay or 0)
+                self._next_request_at = max(self._next_request_at, monotonic() + delay)
+                if attempt + 1 == self.max_attempts or delay > 13:
+                    raise ProviderError(category)
+                sleep(delay)
+        raise ProviderError("provider_unavailable")
 
 
 class USDAProvider(FoodProvider):
@@ -138,6 +205,7 @@ class USDAProvider(FoodProvider):
             1079: ("fiber_g", "G"),
         }
         values = {}
+        energies = {}
         entries = row.get("foodNutrients") or []
         if not isinstance(entries, list):
             return None
@@ -145,9 +213,22 @@ class USDAProvider(FoodProvider):
             if not isinstance(entry, dict):
                 continue
             nutrient_id = entry.get("nutrientId")
+            if (
+                isinstance(nutrient_id, int)
+                and nutrient_id in {1008, 2047, 2048}
+                and str(entry.get("unitName", "")).upper() == "KCAL"
+            ):
+                value = nutrient(entry.get("value"))
+                if value is not None:
+                    energies[nutrient_id] = value
             key = mapping.get(nutrient_id) if isinstance(nutrient_id, int) else None
             if key and str(entry.get("unitName", "")).upper() == key[1]:
                 values[key[0]] = nutrient(entry.get("value"))
+        # Foundation uses Atwater energy IDs. Prefer specific factors, then general,
+        # then legacy energy; never add multiple alternative estimates together.
+        values["calories_kcal"] = next(
+            (energies[key] for key in (2048, 2047, 1008) if key in energies), None
+        )
         return NormalizedFood(
             name=row["description"][:300],
             source="usda",
@@ -157,6 +238,8 @@ class USDAProvider(FoodProvider):
 
 
 class OpenFoodFactsProvider(FoodProvider):
+    max_attempts = 3
+
     def fetch_search(self, query: str) -> list[NormalizedFood]:
         # Legacy CGI supports free text; v2 search is a structured filter API.
         data = self.fetch(

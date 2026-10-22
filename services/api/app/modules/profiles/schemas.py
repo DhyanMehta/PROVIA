@@ -7,9 +7,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import AliasChoices, AwareDatetime, Field, field_validator, model_validator
 
 from app.modules.common import Input, Output, Weight
+from app.modules.nutrition.schemas import GoalCalculationOut
 
 GoalType = Literal["weight_loss", "muscle_gain", "maintenance", "general_fitness"]
 GoalStatus = Literal["active", "completed", "paused"]
+
+
+class WeightGoalPreview(GoalCalculationOut):
+    base_goal_id: UUID
+    weight_log_id: UUID
+
+
+class WeightGoalConfirmation(Input):
+    expected_goal_id: UUID
 
 
 class ProfilePut(Input):

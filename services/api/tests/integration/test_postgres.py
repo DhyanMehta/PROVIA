@@ -18,7 +18,7 @@ from alembic import command
 from app.core.auth import TokenVerifier
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import FitnessGoal, Food, MealLog, User
+from app.db.models import FitnessGoal, Food, GoalTransition, MealLog, Recipe, User
 from app.modules.users.repository import UserRepository
 
 pytestmark = pytest.mark.integration
@@ -60,7 +60,7 @@ def test_migration_roundtrip_and_no_drift(pg_engine):
     with pg_engine.begin() as connection:
         tables = inspect(connection).get_table_names()
         assert set(Base.metadata.tables) <= set(tables)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
         for name, table in Base.metadata.tables.items():
             assert len(inspect(connection).get_foreign_keys(name)) == len(table.foreign_keys)
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
@@ -174,6 +174,8 @@ def test_food_meal_summary_snapshots_and_isolation(authenticated_client, pg_engi
             "selected_deficit_kcal": 500,
         },
     )
+    with Session(pg_engine) as session, session.begin():
+        session.execute(text("UPDATE goal_transitions SET effective_at = '2025-01-01T00:00:00Z'"))
     food_response = api.post(
         "/api/v1/foods/custom",
         headers=own,
@@ -292,7 +294,7 @@ def test_calculated_goal_history_and_profile_edits(authenticated_client):
     assert Decimal(revised.json()["daily_calorie_target"]) == 1952
 
 
-def test_dashboard_tracks_meal_changes(authenticated_client):
+def test_dashboard_tracks_meal_changes(authenticated_client, pg_engine):
     api, headers = authenticated_client
     own = headers()
     path = "/api/v1/nutrition/dashboard?date=2026-01-01"
@@ -302,6 +304,8 @@ def test_dashboard_tracks_meal_changes(authenticated_client):
         headers=own,
         json={"current_weight_kg": 97, "target_weight_kg": 85, "deficit_kcal": 500},
     )
+    with Session(pg_engine) as session, session.begin():
+        session.execute(text("UPDATE goal_transitions SET effective_at = '2025-01-01T00:00:00Z'"))
     food = api.post(
         "/api/v1/foods/custom",
         headers=own,
@@ -397,4 +401,288 @@ def test_database_constraints(pg_engine):
                 serving_basis="100g",
                 protein_g=-1,
             )
+        )
+
+
+def test_historical_goal_selection_and_pause(authenticated_client, pg_engine):
+    from uuid import UUID
+
+    api, headers = authenticated_client
+    own = headers()
+    first = api.post(
+        "/api/v1/goals",
+        headers=own,
+        json={"current_weight_kg": 97, "target_weight_kg": 85, "deficit_kcal": 500},
+    ).json()
+    second = api.post(
+        "/api/v1/goals",
+        headers=own,
+        json={"current_weight_kg": 90, "target_weight_kg": 85, "deficit_kcal": 400},
+    ).json()
+    assert (
+        api.patch(
+            f"/api/v1/goals/{second['id']}", headers=own, json={"status": "paused"}
+        ).status_code
+        == 200
+    )
+    with Session(pg_engine) as session, session.begin():
+        events = session.scalars(select(GoalTransition).order_by(GoalTransition.effective_at)).all()
+        assert [str(e.goal_id) if e.goal_id else None for e in events] == [
+            first["id"],
+            second["id"],
+            None,
+        ]
+        for event, when in zip(
+            events,
+            ["2026-10-01T08:00:00+00:00", "2026-11-01T08:00:00+00:00", "2026-11-02T08:00:00+00:00"],
+            strict=True,
+        ):
+            event.effective_at = datetime.fromisoformat(when)
+        assert session.get(FitnessGoal, UUID(first["id"])).daily_calorie_target == 1828
+    for day, expected in [
+        ("2026-09-30", None),
+        ("2026-10-01", 1828),
+        ("2026-10-31", 1828),
+        ("2026-11-01", 1760),
+        ("2026-11-02", None),
+    ]:
+        dashboard = api.get(f"/api/v1/nutrition/dashboard?date={day}", headers=own).json()
+        actual = dashboard["daily_calorie_target"]
+        assert (Decimal(actual) if actual is not None else None) == expected
+        daily = api.get(f"/api/v1/nutrition/daily?date={day}", headers=own).json()
+        assert (
+            Decimal(daily["targets"]["calories_kcal"]) if daily["targets"] else None
+        ) == expected
+        assert (
+            api.get(f"/api/v1/nutrition/dashboard?date={day}", headers=headers("other")).json()[
+                "daily_calorie_target"
+            ]
+            is None
+        )
+    # Reactivation creates a fresh event rather than rewriting the previous period.
+    assert (
+        api.patch(
+            f"/api/v1/goals/{first['id']}", headers=own, json={"status": "active"}
+        ).status_code
+        == 200
+    )
+    assert (
+        Decimal(
+            api.get("/api/v1/nutrition/dashboard?date=2026-10-01", headers=own).json()[
+                "daily_calorie_target"
+            ]
+        )
+        == 1828
+    )
+
+
+@pytest.mark.parametrize(
+    "timezone,day,start,end",
+    [
+        ("Asia/Kolkata", "2026-10-01", "2026-09-30T18:30:00+00:00", "2026-10-01T18:30:00+00:00"),
+        (
+            "America/New_York",
+            "2026-03-08",
+            "2026-03-08T05:00:00+00:00",
+            "2026-03-09T04:00:00+00:00",
+        ),
+        (
+            "America/New_York",
+            "2026-11-01",
+            "2026-11-01T04:00:00+00:00",
+            "2026-11-02T05:00:00+00:00",
+        ),
+    ],
+)
+def test_historical_same_day_timezone_and_dst(
+    authenticated_client, pg_engine, timezone, day, start, end
+):
+    api, headers = authenticated_client
+    own = headers()
+    api.put(
+        "/api/v1/profile",
+        headers=own,
+        json={
+            "display_name": "Test",
+            "height_cm": 175,
+            "current_weight_kg": 97,
+            "activity_level": "moderate",
+            "timezone": timezone,
+        },
+    )
+    for deficit in [500, 400, 300]:
+        assert (
+            api.post(
+                "/api/v1/goals",
+                headers=own,
+                json={"current_weight_kg": 97, "target_weight_kg": 85, "deficit_kcal": deficit},
+            ).status_code
+            == 201
+        )
+    with Session(pg_engine) as session, session.begin():
+        events = session.scalars(select(GoalTransition).order_by(GoalTransition.effective_at)).all()
+        events[0].effective_at = datetime.fromisoformat(start)
+        events[1].effective_at = datetime.fromisoformat(end) - timedelta(microseconds=1)
+        events[2].effective_at = datetime.fromisoformat(end)
+    # Last transition strictly before the next midnight wins. A midnight change belongs to tomorrow.
+    response = api.get(f"/api/v1/nutrition/dashboard?date={day}", headers=own)
+    assert response.status_code == 200
+    assert Decimal(response.json()["daily_calorie_target"]) == 1928
+
+
+def test_weight_log_preview_and_confirm(authenticated_client, pg_engine):
+    api, headers = authenticated_client
+    own = headers()
+    goal = api.post(
+        "/api/v1/goals",
+        headers=own,
+        json={"current_weight_kg": 97, "target_weight_kg": 85, "deficit_kcal": 400},
+    ).json()
+    log = api.post("/api/v1/weight-logs", headers=own, json={"weight_kg": 90}).json()
+    active = next(
+        g for g in api.get("/api/v1/goals", headers=own).json()["items"] if g["status"] == "active"
+    )
+    assert active["id"] == goal["id"] and Decimal(active["daily_calorie_target"]) == 1928
+    path = f"/api/v1/weight-logs/{log['id']}"
+    preview = api.post(path + "/goal-preview", headers=own)
+    assert preview.status_code == 200
+    assert Decimal(preview.json()["daily_calorie_target"]) == 1760
+    assert Decimal(preview.json()["target_weight_kg"]) == 85
+    assert api.post(path + "/goal-preview", headers=headers("other")).status_code == 404
+    confirmed = api.post(path + "/apply-goal", headers=own, json={"expected_goal_id": goal["id"]})
+    assert confirmed.status_code == 201
+    assert confirmed.json()["id"] != goal["id"]
+    assert Decimal(confirmed.json()["daily_calorie_target"]) == 1760
+    assert (
+        api.post(
+            path + "/apply-goal", headers=own, json={"expected_goal_id": goal["id"]}
+        ).status_code
+        == 409
+    )
+    with Session(pg_engine) as session:
+        assert session.scalar(select(func.count()).select_from(GoalTransition)) == 2
+
+
+def test_recipe_yield_portions_and_snapshots(authenticated_client, pg_engine):
+    from uuid import UUID
+
+    api, headers = authenticated_client
+    own = headers()
+    base = api.post(
+        "/api/v1/foods/custom",
+        headers=own,
+        json={
+            "name": "Synthetic ingredient",
+            "food_kind": "ingredient",
+            "calories_kcal": 100,
+            "protein_g": 10,
+            "carbs_g": 10,
+            "fat_g": 2,
+        },
+    ).json()
+    oil = api.post(
+        "/api/v1/foods/custom",
+        headers=own,
+        json={
+            "name": "Synthetic oil fixture",
+            "food_kind": "ingredient",
+            "calories_kcal": 900,
+            "protein_g": 0,
+            "carbs_g": 0,
+            "fat_g": 100,
+            "fiber_g": 0,
+        },
+    ).json()
+    data = {
+        "name": "Synthetic prepared recipe",
+        "yield_g": 200,
+        "aliases": ["test dish"],
+        "ingredients": [
+            {"food_id": base["id"], "quantity_g": 100},
+            {"food_id": oil["id"], "quantity_g": 10},
+        ],
+        "portions": [{"label": "measured bowl", "grams": 50}],
+    }
+    response = api.post("/api/v1/recipes", headers=own, json=data)
+    assert response.status_code == 201
+    recipe = response.json()
+    assert recipe["incomplete"] is True
+    assert Decimal(recipe["food"]["calories_kcal"]) == 95
+    assert Decimal(recipe["food"]["protein_g"]) == 5
+    assert recipe["food"]["fiber_g"] is None
+    assert recipe["food"]["food_kind"] == "recipe"
+    assert api.get(f"/api/v1/recipes/{recipe['id']}", headers=own).status_code == 200
+    assert api.get(f"/api/v1/recipes/{recipe['id']}", headers=headers("other")).status_code == 404
+    assert api.post("/api/v1/recipes", headers=headers("other"), json=data).status_code == 404
+    duplicate = {**data, "ingredients": [data["ingredients"][0], data["ingredients"][0]]}
+    assert api.post("/api/v1/recipes", headers=own, json=duplicate).status_code == 422
+    meal = api.post(
+        "/api/v1/meals",
+        headers=own,
+        json={
+            "meal_type": "dinner",
+            "items": [
+                {
+                    "food_id": recipe["food"]["id"],
+                    "portion_id": recipe["food"]["portions"][0]["id"],
+                    "portion_count": 1,
+                }
+            ],
+        },
+    ).json()
+    assert Decimal(meal["totals"]["calories_kcal"]) == Decimal("47.5")
+    with Session(pg_engine) as session, session.begin():
+        session.get(Food, UUID(base["id"])).calories_kcal = 1000
+    unchanged = api.get(f"/api/v1/recipes/{recipe['id']}", headers=own).json()
+    assert Decimal(unchanged["food"]["calories_kcal"]) == 95
+    assert Decimal(unchanged["ingredients"][0]["calories_kcal_snapshot"]) in {100, 90}
+    assert Decimal(
+        api.get(f"/api/v1/meals/{meal['id']}", headers=own).json()["totals"]["calories_kcal"]
+    ) == Decimal("47.5")
+    with Session(pg_engine) as session:
+        assert session.scalar(select(func.count()).select_from(Recipe)) == 1
+
+
+def test_goal_transition_constraints_and_deletion(pg_engine):
+    with Session(pg_engine) as session, session.begin():
+        user = UserRepository(session).resolve("transition", None)
+        goal = FitnessGoal(user_id=user.id, goal_type="maintenance", status="paused")
+        session.add(goal)
+        session.flush()
+        when = datetime.now(UTC)
+        session.add(GoalTransition(user_id=user.id, goal_id=goal.id, effective_at=when))
+        user_id, goal_id = user.id, goal.id
+    with pytest.raises(IntegrityError), Session(pg_engine) as session, session.begin():
+        session.add(GoalTransition(user_id=user_id, goal_id=None, effective_at=when))
+    with pytest.raises(IntegrityError), Session(pg_engine) as session, session.begin():
+        session.delete(session.get(FitnessGoal, goal_id))
+
+
+def test_migration_preserves_goals_without_inventing_history(pg_engine):
+    with pg_engine.begin() as connection:
+        config = Config("alembic.ini")
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0002")
+        user_id, goal_id = uuid4(), uuid4()
+        connection.execute(
+            text("INSERT INTO users (id, auth_provider_subject) VALUES (:id, 'legacy')"),
+            {"id": user_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO fitness_goals "
+                "(id,user_id,goal_type,status,daily_calorie_target,created_at) "
+                "VALUES (:id,:user,'maintenance','active',1800,'2020-01-01')"
+            ),
+            {"id": goal_id, "user": user_id},
+        )
+        before = connection.scalar(text("SELECT clock_timestamp()"))
+        command.upgrade(config, "head")
+        event = connection.execute(text("SELECT goal_id,effective_at FROM goal_transitions")).one()
+        assert event.goal_id == goal_id and event.effective_at >= before
+        assert (
+            connection.scalar(
+                text("SELECT daily_calorie_target FROM fitness_goals WHERE id=:id"), {"id": goal_id}
+            )
+            == 1800
         )

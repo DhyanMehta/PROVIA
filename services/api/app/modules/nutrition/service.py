@@ -1,5 +1,7 @@
+from decimal import ROUND_HALF_UP, Decimal
+
 from app.core.exceptions import AppError
-from app.db.models import Food, FoodPortion, MealItem, MealLog
+from app.db.models import Food, FoodPortion, MealItem, MealLog, Recipe, RecipeIngredient
 from app.integrations.foods import NUTRIENTS, ProviderError
 from app.modules.common import day_bounds
 from app.modules.nutrition.calculations import (
@@ -32,6 +34,84 @@ class NutritionService:
         food.portions = [FoodPortion(**portion.model_dump()) for portion in data.portions]
         return self.repository.save(food)
 
+    def create_recipe(self, user_id, data):
+        foods = {
+            food.id: food
+            for food in self.repository.foods(user_id, [row.food_id for row in data.ingredients])
+        }
+        ingredients = []
+        for row in data.ingredients:
+            food = foods.get(row.food_id)
+            if food is None:
+                raise AppError("RESOURCE_NOT_FOUND", "Ingredient food was not found", 404)
+            values = {
+                name + "_snapshot": (
+                    getattr(food, name) * row.quantity_g / Decimal(100)
+                    if getattr(food, name) is not None
+                    else None
+                )
+                for name in NUTRIENTS
+            }
+            ingredients.append(
+                RecipeIngredient(food_id=food.id, quantity_g=row.quantity_g, **values)
+            )
+        total = totals(ingredients)
+        values = {
+            name: (value / data.yield_g * Decimal(100) if value is not None else None)
+            for name, value in total.items()
+        }
+        if any(value is not None and value > 1000000 for value in values.values()):
+            raise AppError(
+                "INVALID_RECIPE_YIELD",
+                "Yield produces nutrition values outside the supported range",
+                422,
+            )
+        values = {
+            name: value.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+            if value is not None
+            else None
+            for name, value in values.items()
+        }
+        food = self.repository.save(
+            Food(
+                name=data.name,
+                aliases=data.aliases,
+                food_kind="recipe",
+                source="custom",
+                serving_basis="100g",
+                created_by_user_id=user_id,
+                portions=[FoodPortion(**portion.model_dump()) for portion in data.portions],
+                **values,
+            )
+        )
+        recipe = self.repository.save(
+            Recipe(
+                food_id=food.id,
+                user_id=user_id,
+                yield_g=data.yield_g,
+                incomplete=any(value is None for value in values.values()),
+                ingredients=ingredients,
+            )
+        )
+        return self.recipe_output(recipe, food)
+
+    def get_recipe(self, user_id, recipe_id):
+        recipe = self.repository.recipe(user_id, recipe_id)
+        if recipe is None:
+            raise AppError("RESOURCE_NOT_FOUND", "Recipe was not found", 404)
+        return self.recipe_output(recipe, self.food(user_id, recipe.food_id))
+
+    @staticmethod
+    def recipe_output(recipe, food):
+        return {
+            "id": recipe.id,
+            "food": food,
+            "yield_g": recipe.yield_g,
+            "incomplete": recipe.incomplete,
+            "ingredients": recipe.ingredients,
+            "created_at": recipe.created_at,
+        }
+
     def search(self, user_id, query, providers, local_source=None):
         items = {
             food.id: food for food in self.repository.local_search(user_id, query, local_source)
@@ -43,8 +123,15 @@ class NutritionService:
                     items[food.id] = food
                 statuses[source] = "ok"
             except ProviderError as exc:
-                statuses[source] = str(exc)
-        if providers and all(status != "ok" for status in statuses.values()) and not items:
+                statuses[source] = "cached" if exc.cached_foods is not None else str(exc)
+                if exc.cached_foods is not None:
+                    for food in self.repository.import_foods(exc.cached_foods):
+                        items[food.id] = food
+        if (
+            providers
+            and all(status not in {"ok", "cached"} for status in statuses.values())
+            and not items
+        ):
             raise AppError(
                 "FOOD_PROVIDERS_UNAVAILABLE", "Food search providers are unavailable", 503
             )
@@ -112,7 +199,7 @@ class NutritionService:
         timezone = self.timezone(user_id)
         start, end = day_bounds(day, timezone)
         meals = self.repository.meals(user_id, start, end)
-        goal = self.repository.active_goal(user_id)
+        goal = self.repository.goal_at(user_id, end)
         targets = None
         if goal:
             targets = {

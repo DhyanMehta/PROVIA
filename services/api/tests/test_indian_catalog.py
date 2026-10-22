@@ -38,6 +38,20 @@ def test_curated_attribution_required():
         CuratedRecord(name="Roti", source_food_id="1")
 
 
+def test_curated_duplicate_identity_rejected(tmp_path):
+    path = tmp_path / "foods.json"
+    record = {
+        "name": "Test",
+        "source_food_id": "one",
+        "source_url": "https://example.com/test",
+        "license_name": "synthetic fixture",
+        "food_kind": "ingredient",
+    }
+    path.write_text(json.dumps([record, {**record, "source_food_id": "two"}]))
+    with pytest.raises(ValueError, match="Duplicate"):
+        load_catalog(path)
+
+
 def test_provider_cache_and_rate_limit():
     calls = []
 

@@ -13,11 +13,33 @@ from app.modules.profiles.schemas import (
     ProfileOut,
     ProfilePut,
     WeightCreate,
+    WeightGoalConfirmation,
+    WeightGoalPreview,
     WeightOut,
 )
 from app.modules.profiles.service import ProfileService
 
 router = APIRouter(tags=["onboarding"])
+
+
+@router.post("/weight-logs/{weight_id}/goal-preview", response_model=WeightGoalPreview)
+def weight_goal_preview(weight_id: UUID, user: CurrentUser, session: DbSession, request: Request):
+    return ProfileService(
+        ProfileRepository(session), request.app.state.settings.nutrition_min_daily_calories
+    ).weight_preview(user.id, weight_id)
+
+
+@router.post("/weight-logs/{weight_id}/apply-goal", response_model=GoalOut, status_code=201)
+def apply_weight_goal(
+    weight_id: UUID,
+    data: WeightGoalConfirmation,
+    user: CurrentUser,
+    session: DbSession,
+    request: Request,
+):
+    return ProfileService(
+        ProfileRepository(session), request.app.state.settings.nutrition_min_daily_calories
+    ).apply_weight(user.id, weight_id, data.expected_goal_id)
 
 
 @router.get("/profile", response_model=ProfileOut)

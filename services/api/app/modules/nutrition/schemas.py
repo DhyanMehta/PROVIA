@@ -20,12 +20,21 @@ class PortionOut(PortionCreate, Output):
 class FoodCreate(Input):
     name: Annotated[str, Field(min_length=1, max_length=300)]
     brand: Annotated[str, Field(max_length=200)] | None = None
+    food_kind: Literal["unspecified", "ingredient", "prepared_dish"] = "unspecified"
+    aliases: Annotated[list[str], Field(max_length=30)] = Field(default_factory=list)
     calories_kcal: Nutrient | None = None
     protein_g: Nutrient | None = None
     carbs_g: Nutrient | None = None
     fat_g: Nutrient | None = None
     fiber_g: Nutrient | None = None
     portions: Annotated[list[PortionCreate], Field(max_length=30)] = Field(default_factory=list)
+
+    @field_validator("aliases")
+    @classmethod
+    def clean_aliases(cls, values):
+        if any(not value.strip() or len(value) > 100 for value in values):
+            raise ValueError("Aliases must be nonempty and at most 100 characters")
+        return sorted({value.strip().casefold() for value in values})
 
     @field_validator("portions")
     @classmethod
@@ -38,6 +47,8 @@ class FoodCreate(Input):
 class FoodOut(Output):
     id: UUID
     name: str
+    food_kind: str = "unspecified"
+    verified_at: datetime | None = None
     brand: str | None
     source: str
     source_food_id: str | None
@@ -56,6 +67,46 @@ class FoodOut(Output):
 class SearchOut(Output):
     items: list[FoodOut]
     provider_status: dict[str, str]
+
+
+class RecipeIngredientInput(Input):
+    food_id: UUID
+    quantity_g: Quantity
+
+
+class RecipeCreate(Input):
+    name: Annotated[str, Field(min_length=1, max_length=300)]
+    aliases: Annotated[list[str], Field(max_length=30)] = Field(default_factory=list)
+    yield_g: Quantity
+    ingredients: Annotated[list[RecipeIngredientInput], Field(min_length=1, max_length=100)]
+    portions: Annotated[list[PortionCreate], Field(max_length=30)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_recipe(self):
+        if len({row.food_id for row in self.ingredients}) != len(self.ingredients):
+            raise ValueError("Combine repeated ingredients into one quantity")
+        self.aliases = FoodCreate.clean_aliases(self.aliases)
+        FoodCreate.unique_labels(self.portions)
+        if any(portion.grams > self.yield_g for portion in self.portions):
+            raise ValueError("A portion cannot exceed the final recipe yield")
+        return self
+
+
+class RecipeIngredientOut(RecipeIngredientInput, Output):
+    calories_kcal_snapshot: Decimal | None
+    protein_g_snapshot: Decimal | None
+    carbs_g_snapshot: Decimal | None
+    fat_g_snapshot: Decimal | None
+    fiber_g_snapshot: Decimal | None
+
+
+class RecipeOut(Output):
+    id: UUID
+    food: FoodOut
+    yield_g: Decimal
+    incomplete: bool
+    ingredients: list[RecipeIngredientOut]
+    created_at: datetime
 
 
 class MealItemCreate(Input):

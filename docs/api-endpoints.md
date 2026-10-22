@@ -28,7 +28,7 @@ timestamps are timezone-aware. The examples contain no credentials.
 | GET | /meals/{meal_id} | Own meal, items, and totals |
 | PATCH | /meals/{meal_id} | Partial fields; supplied items replaces entire item list |
 | DELETE | /meals/{meal_id} | 204 with no body; deletes meal and its items |
-| GET | /nutrition/daily | Required date; totals, active goal targets, meal breakdown |
+| GET | /nutrition/daily | Required date; totals, historically applicable targets, meal breakdown |
 | GET | /nutrition/dashboard | Required date; targets, consumed, remaining, macro calorie equivalents |
 | POST | /nutrition/calculate-maintenance | Public stateless weight × 24 estimate |
 | POST | /nutrition/calculate-goals | Public stateless full target preview |
@@ -127,8 +127,7 @@ calculation method/version, and calories/protein/carbs/fat/fiber budgets. Protei
 carbs and fat each include target/consumed/remaining grams and kcal. Fiber includes
 grams only. Negative remaining values are retained. Unknown consumed nutrients or
 missing targets yield null remaining values. Daily and dashboard share aggregation.
-Historical dates use stored meal snapshots and the **current active goal**; goal
-history is preserved, but effective-dated historical target lookup is not implemented.
+Historical dates use stored meal snapshots and the goal transition timeline described below.
 
 ## Errors
 
@@ -143,3 +142,83 @@ history is preserved, but effective-dated historical target lookup is not implem
 `X-Request-ID` accompanies responses for server log correlation. CORS does not expose
 it to browser JavaScript by default. Health/db is operational and unauthenticated;
 limit its network exposure at deployment if required.
+
+
+## Historical target policy (migration 0003)
+
+Daily and dashboard choose the last goal transition strictly before the end of the
+requested day in the profile's IANA timezone. The last same-day activation or pause
+wins for that whole day. A change exactly at the following midnight belongs to the
+following day. Calendar boundaries support 23/25-hour DST days. No transition or a
+pause transition means targets and remaining values are null, while consumed totals
+remain available. Current goal status is not used to rewrite past validity.
+
+Activations, replacements, pauses and completions append transitions under the user
+lock. Intervals are implicitly half-open until the next transition; unique per-user
+timestamps prevent ties. Nutrient snapshots remain unchanged. Reactivation appends a
+new period. Referenced goals cannot be deleted. There is no backdating/deletion API.
+
+Pre-0003 status changes were not logged. Migration preserves all old snapshots and
+records only the current active state at migration time. Earlier target validity is
+unknown and returned as null; created_at alone cannot prove an activation date.
+Changing profile timezone reinterprets local calendar-day boundaries for past meals.
+
+## Weight measurement, preview and confirmation
+
+POST /weight-logs is measurement-only. It never changes the profile or any goal.
+To reuse a logged weight with the active goal's target weight and deficit:
+
+1. POST /weight-logs/{weight_id}/goal-preview (authenticated, no body). Returns full
+   calculated targets plus base_goal_id and weight_log_id; no records are changed.
+2. POST /weight-logs/{weight_id}/apply-goal with
+   `{"expected_goal_id":"UUID_FROM_PREVIEW"}`. Returns201 with a new GoalOut UUID.
+   The prior goal is preserved and its historical period remains available.
+3. If the active goal changed since preview, confirmation returns409 GOAL_CHANGED.
+   Preview again; do not silently confirm against different inputs.
+
+Foreign/missing weight IDs return404. Without a calculated active goal, return422
+CALCULATION_INPUTS_REQUIRED. Existing POST/PATCH goals remain available. PUT profile
+with a changed current weight remains an explicit recalculation request under the
+existing contract; a measurement alone never calls it.
+
+## User-created recipes
+
+POST /recipes requires authentication and creates an immutable recipe plus a private
+food. GET /recipes/{recipe_id} returns only the owner's recipe (foreign IDs return404).
+
+```json
+{
+  "name": "My measured recipe",
+  "yield_g": "500",
+  "aliases": ["my lunch"],
+  "ingredients": [
+    {"food_id": "INGREDIENT_FOOD_UUID", "quantity_g": "200"},
+    {"food_id": "OIL_FOOD_UUID", "quantity_g": "10"}
+  ],
+  "portions": [{"label": "measured bowl", "grams": "125"}]
+}
+```
+
+Supply actual final yield, not the sum of raw weights. Ingredients must be visible to
+this user; repeat ingredient IDs must be combined. Response includes id, food, yield_g,
+incomplete, ingredient quantities/nutrient snapshots and created_at. The nested food
+has food_kind=recipe and a UUID/portions usable directly by POST /meals. Missing any
+ingredient nutrient makes that recipe nutrient null and incomplete=true. Unknowns are
+not zero. Include cooking oil/ghee explicitly; the service does not infer ingredients.
+Create a new recipe for changes; ingredient/catalog changes never recalculate old ones.
+
+Custom foods now accept aliases and food_kind=unspecified/ingredient/prepared_dish.
+Curated matches rank first, then custom foods/recipes, then external catalog matches.
+Food output includes food_kind and verified_at (curated operator attestation only).
+Source IDs, source URLs, licenses and known portion grams remain available.
+
+## Food provider resilience
+
+Search still returns safe machine categories in provider_status, never remote bodies.
+OFF uses up to3 attempts with6/12-second exponential backoff plus jitter for429,5xx,
+network failures and timeouts. Long Retry-After values defer later requests instead of
+blocking a request indefinitely. Other4xx/redirect errors are not retried. Successful
+cached query results may be reused for up to FOOD_PROVIDER_STALE_SECONDS after expiry
+(default3600), labeled cached. Persisted catalog rows remain searchable separately.
+Failures do not prevent local/USDA results. Total provider failure with no local/stale
+results returns a generic503. No barcode API was added.

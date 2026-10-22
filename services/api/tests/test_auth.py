@@ -100,6 +100,49 @@ def test_missing_token(client):
     assert response.headers["www-authenticate"] == "Bearer"
 
 
+def test_jwks_rotation_refreshes_unknown_key(signing_key, token_setup, monkeypatch):
+    import json
+    from io import BytesIO
+
+    verifier, claims = token_setup
+    verifier._client = jwt.PyJWKClient(verifier.settings.auth_jwks_url, cache_keys=False)
+    replacement = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    responses = []
+    for kid, key in [("old", signing_key), ("new", replacement)]:
+        jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+        jwk.update(kid=kid, alg="RS256", use="sig")
+        responses.append(json.dumps({"keys": [jwk]}).encode())
+    calls = []
+
+    def fetch(*args, **kwargs):
+        calls.append(1)
+        return BytesIO(responses.pop(0))
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *args: SimpleNamespace(open=fetch))
+    old = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "old"})
+    new = jwt.encode(claims, replacement, algorithm="RS256", headers={"kid": "new"})
+    assert verifier.verify(old)["sub"] == claims["sub"]
+    # PyJWT limits unknown-key refreshes to prevent attacker-controlled kid floods.
+    with pytest.raises(HTTPException):
+        verifier.verify(new)
+    assert len(calls) == 1
+    verifier._client._last_successful_fetch -= 31
+    assert verifier.verify(new)["sub"] == claims["sub"]
+    assert verifier.verify(new)["sub"] == claims["sub"]
+    assert len(calls) == 2
+
+
+def test_required_authorized_party(signing_key, token_setup):
+    verifier, claims = token_setup
+    verifier.settings.auth_require_authorized_party = True
+    token = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+    with pytest.raises(HTTPException) as error:
+        verifier.verify(token)
+    assert error.value.status_code == 401
+
+
 def test_provider_unconfigured(client):
     assert client.get("/api/v1/me", headers={"Authorization": "Bearer anything"}).status_code == 503
 

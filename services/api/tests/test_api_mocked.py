@@ -73,7 +73,7 @@ def test_mocked_food_meal_api(application, monkeypatch):
         )
         repository.meals.return_value = [meal]
         repository.profile.return_value = None
-        repository.active_goal.return_value = None
+        repository.goal_at.return_value = None
         assert client.get("/api/v1/meals").status_code == 200
         assert client.get("/api/v1/nutrition/daily?date=2026-01-01").status_code == 200
         assert client.get("/api/v1/nutrition/daily?date=9999-12-31").status_code == 422
