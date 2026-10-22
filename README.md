@@ -1,203 +1,240 @@
-# PROVIA
+# PROVIA backend
 
-PROVIA is an Android-first fitness and wellness application for weight loss,
-muscle gain, weight maintenance, and overall health improvement.
+Android-first fitness and wellness tracking. Day 1 Tasks 1–8 implement the backend
+foundation, database schema, managed JWT authentication, onboarding, and nutrition.
+Mobile and test-web remain placeholders. Workout, activity, sleep, and water tables
+exist; their feature APIs and all AI functionality are outside this assignment.
 
-Day 1, Task 2 provides the backend application foundation: centralized settings,
-versioned routing, health/readiness endpoints, CORS, safe errors, and request logging.
-Mobile, test-web, and shared API client directories are placeholders.
+## Stack
 
-## Technology stack
+Python 3.12, FastAPI, Pydantic v2 / pydantic-settings, SQLAlchemy 2, Alembic,
+Psycopg 3, uv, HTTPX, PyJWT / cryptography, Pytest and Ruff. Neon PostgreSQL is the
+intended database. Cloudflare R2 is reserved for later work. Planned mobile stack:
+React Native, Expo, TypeScript, Expo Router, NativeWind, TanStack Query, Zustand,
+Expo SQLite, Android Health Connect.
 
-- Mobile (planned): React Native, Expo, TypeScript, Expo Router, NativeWind,
-  TanStack Query, Zustand, Expo SQLite.
-- Backend: Python 3.12, uv, FastAPI, Pydantic v2, pydantic-settings,
-  SQLAlchemy 2, Alembic, Psycopg 3.
-- Supporting libraries: HTTPX, boto3, PyJWT, cryptography.
-- Development: Pytest, pytest-cov, Ruff; GitHub Actions planned.
-- Infrastructure (planned): Neon PostgreSQL, Cloudflare R2, managed authentication
-  (provider TBD), USDA FoodData Central, Open Food Facts, Android Health Connect.
+## Install and run
 
-The backend will be a modular monolith with feature-based organization and REST
-routes under `/api/v1`. Database access, authentication, and feature logic are
-reserved for later tasks.
-
-## Folder structure
-
-```text
-Provia/
-├── apps/
-│   ├── mobile/.gitkeep
-│   └── test-web/.gitkeep
-├── services/api/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── core/
-│   │   │   ├── __init__.py
-│   │   │   ├── config.py
-│   │   │   ├── cors.py
-│   │   │   ├── exceptions.py
-│   │   │   └── logging.py
-│   │   └── api/
-│   │       ├── __init__.py
-│   │       └── v1/
-│   │           ├── __init__.py
-│   │           ├── router.py
-│   │           └── endpoints/
-│   │               ├── __init__.py
-│   │               └── health.py
-│   ├── tests/
-│   │   ├── conftest.py
-│   │   ├── test_config.py
-│   │   ├── test_foundation.py
-│   │   └── test_health.py
-│   ├── .env.example
-│   ├── .python-version
-│   ├── pyproject.toml
-│   └── uv.lock
-├── packages/api-client/.gitkeep
-├── docs/.gitkeep
-├── .gitignore
-└── README.md
-```
-
-## Prerequisites and installation
-
-Install Git and uv. If Python is already available, install uv with:
+From this repository in PowerShell:
 
 ```powershell
 python -m pip install --user uv
-```
-
-From the repository root:
-
-```powershell
 cd services/api
 python -m uv python install 3.12
 python -m uv sync --locked
+# Copy only if .env does not already exist:
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+python -m uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-These commands create `.venv` with Python 3.12 and install runtime and development
-dependencies from `uv.lock`. If uv is installed as a standalone executable, use
-`uv` in place of `python -m uv` in all commands.
+Use `uv` instead of `python -m uv` when uv is installed as a standalone executable.
+The local `.env` is git-ignored. Never paste real credentials into source files.
 
-No Neon credentials or other service credentials are needed. Optionally copy
-`services/api/.env.example` to `services/api/.env` and edit local settings.
-The application loads this file regardless of the working directory; process
-environment variables take precedence. Settings are cached; restart after changes.
-Never commit real credentials or local `.env` files.
+[Swagger](http://127.0.0.1:8000/docs), [OpenAPI](http://127.0.0.1:8000/openapi.json),
+[liveness](http://127.0.0.1:8000/api/v1/health),
+[readiness](http://127.0.0.1:8000/api/v1/health/ready),
+[database health](http://127.0.0.1:8000/api/v1/health/db).
+
+Without external configuration the app starts and liveness/readiness return 200.
+Database health returns 503 until SELECT 1 succeeds. Authenticated operations require
+both a configured provider and migrated PostgreSQL database. Readiness means the
+application initialized; it deliberately does not claim external-service readiness.
 
 ## Configuration
 
-Environment variable names are case-insensitive. CORS origins use a JSON array.
+Pydantic loads `services/api/.env`, independent of working directory. Environment
+variables take precedence. Cached settings require a restart after changes.
 
-| Variable | Default / purpose |
+| Variable | Meaning / default |
 | --- | --- |
-| `APP_NAME` | `provia-api`; application title and health service name |
-| `APP_VERSION` | `0.1.0`; OpenAPI and health version |
-| `APP_ENV` | `development`; accepts development, testing, staging, production |
-| `DEBUG` | `false`; enables debug logging locally, never traceback responses |
-| `API_V1_PREFIX` | `/api/v1`; absolute path without trailing slash |
-| `CORS_ORIGINS` | `["http://localhost:5173"]`; explicit HTTP(S) origins only |
-| `CORS_ALLOW_CREDENTIALS` | `false`; opt in only for trusted browser origins |
-| `LOG_LEVEL` | Optional DEBUG, INFO, WARNING, ERROR, CRITICAL; default INFO, or DEBUG with local DEBUG enabled |
-| `DATABASE_URL`, `DIRECT_DATABASE_URL` | Optional secret values, reserved for Task 3 |
-| `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL` | Optional; authentication not implemented |
-| `USDA_API_KEY` | Optional secret; food integration not implemented |
-| `R2_ENDPOINT_URL`, `R2_BUCKET_NAME` | Optional; storage integration not implemented |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Optional secrets; storage integration not implemented |
+| APP_NAME | `provia-api` |
+| APP_VERSION | `0.1.0` |
+| APP_ENV | development (or testing, staging, production) |
+| DEBUG | false; local debug logging only, never traceback responses |
+| API_V1_PREFIX | `/api/v1` |
+| CORS_ORIGINS | JSON array, default `["http://localhost:5173"]` |
+| CORS_ALLOW_CREDENTIALS | false; enable only for trusted origins |
+| LOG_LEVEL | DEBUG / INFO / WARNING / ERROR / CRITICAL; defaults to INFO or local DEBUG |
+| DATABASE_URL | Neon pooled PostgreSQL connection string for application traffic |
+| DIRECT_DATABASE_URL | Direct, non-pooler PostgreSQL URL for Alembic |
+| AUTH_ISSUER | Exact issuer of API access tokens |
+| AUTH_AUDIENCE | Optional; leave empty for Clerk session tokens without aud |
+| AUTH_JWKS_URL | Trusted HTTPS JWKS URL; derived for standard Clerk development issuers |
+| AUTH_AUTHORIZED_PARTIES | JSON array of permitted azp origins; default localhost:5173 |
+| AUTH_REQUIRE_AUTHORIZED_PARTY | false; reject missing azp when enabled |
+| NUTRITION_MIN_DAILY_CALORIES | 1500; configurable product safeguard, not clinical validation |
+| FOOD_PROVIDER_CACHE_SECONDS | 300; process-local search cache |
+| FOOD_PROVIDER_MIN_INTERVAL_SECONDS | 6; per-provider request cooldown |
+| USDA_API_KEY | USDA FoodData Central key; optional, missing provider is reported unavailable |
+| FOOD_HTTP_TIMEOUT_SECONDS | 5; positive, maximum 30 |
+| OFF_USER_AGENT | Identifiable app name/version and your contact email for live OFF requests |
+| R2_ENDPOINT_URL, R2_BUCKET_NAME | Reserved storage configuration |
+| R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY | Reserved storage secrets |
+| TEST_DATABASE_URL | Separate disposable **direct** PostgreSQL URL; integration tests only |
+| TEST_DATABASE_DISPOSABLE | false; explicit true required to run PostgreSQL tests |
 
-`.env.example` explicitly selects INFO logging. Remove that entry to use the
-environment-aware default. Database URLs and credential fields use `SecretStr`
-to mask their representation. The application never logs settings.
+The test variables are read by the test fixture, not application settings. Credentials
+and database URLs use masked settings fields. Configuration is never returned by APIs.
 
-## Routing, CORS, and errors
+## Neon setup and migrations
 
-`create_app()` creates an independent FastAPI instance; tests can supply a
-`Settings` instance. `app = create_app()` remains the Uvicorn entry point.
-`app/api/v1/router.py` registers endpoint routers beneath `API_V1_PREFIX`.
-No import, startup, or readiness operation connects to an external service.
+1. Use a **development branch**, not production. Copy its pooled string into
+   DATABASE_URL and its direct string into DIRECT_DATABASE_URL in `.env`.
+2. Keep `sslmode=require` (or stronger verification) on Neon URLs. The engine enforces
+   at least `require` for `.neon.tech` hosts. Standard `postgresql://` URLs are converted
+   to the Psycopg 3 SQLAlchemy dialect internally.
+3. Confirm the selected database is a safe development database, then run:
 
-- `GET /api/v1/health`: process health and configured version.
-- `GET /api/v1/health/ready`: initialized application only; returns
-  `{"status":"ready","service":"provia-api"}`. It does not report database readiness.
-- `GET /docs` and `GET /openapi.json`: Swagger UI and OpenAPI schema.
+```powershell
+# From services/api
+python -m uv run alembic upgrade head
+python -m uv run alembic current
+python -m uv run alembic check
+```
 
-For a deployed testing frontend, set `CORS_ORIGINS` to its exact origin, for example
-`["https://test.example.com"]`. Origins cannot contain wildcards, credentials,
-paths, query strings, or fragments. Wildcards are rejected in every environment.
-CORS permits common HTTP methods and Accept, Authorization, and Content-Type
-headers. No response headers are exposed to browser JavaScript. Disallowed CORS
-preflights return the middleware's standard 400 response. CORS is a browser policy,
-not authentication or a server-side access restriction.
+Revision `0001_initial` creates all 17 MVP tables; `0002` adds calculated goal snapshots
+and curated-food metadata/indexes without dropping existing data. The application never creates
+or migrates tables automatically. Migrations reject pooled URLs. See
+[Neon's pooling documentation](https://neon.com/docs/connect/connection-pooling).
+Do not downgrade a database containing real data. Automated downgrade checks operate
+only in generated test schemas in a separately configured disposable test database.
 
-Application, HTTP, validation, and unexpected exceptions use this envelope:
+## Authentication
+
+Configure Clerk's exact AUTH_ISSUER and optional AUTH_AUDIENCE for your token format.
+Standard `*.clerk.accounts.dev` issuers derive `/.well-known/jwks.json`; custom domains
+require AUTH_JWKS_URL. Only RS256 is accepted. Set AUTH_AUTHORIZED_PARTIES to trusted
+frontend origins; a present azp must match. Missing azp is accepted unless the require
+flag is enabled, accommodating non-browser clients. Pending sessions are rejected.
+The API verifies signature, issuer, configured audience, expiration, and subject; it does not use
+an unverified user ID. JWKS is cached for five minutes with a five-second fetch timeout.
+Unknown keys trigger a refresh. Missing bearer tokens return 401 with WWW-Authenticate;
+an unconfigured/unavailable provider returns 503. There is no development token bypass.
+
+Send `Authorization: Bearer <access-token>`. Local user provisioning is keyed by the
+provider subject and uses a PostgreSQL unique constraint plus ON CONFLICT to handle
+concurrent first logins. This deployment supports one issuer; migrating to another
+issuer requires an explicit identity migration. PATCH /me changes contact email only,
+not provider identity or sign-in credentials. No passwords are stored.
+
+## Nutrition and API conventions
+
+See [API endpoints](docs/api-endpoints.md) for routes and examples. Collection responses
+use `{ "items": [...], "limit": 20, "offset": 0 }`. Historical lists accept limit 1–100
+and nonnegative offset. Ownership is derived from the authenticated user; cross-user
+IDs return 404. Inputs reject extra fields, including client-supplied user IDs.
+
+Food search supports `source=all|local|indian_curated|usda|open_food_facts`. Provider results are cached
+as shared catalog entries with UUIDs. Custom foods are private. USDA and OFF adapters
+normalize only records with a supported gram basis; volume conversions are never guessed.
+Missing nutrients remain null. Meal snapshots use Decimal, per-100-g values, and 0.001
+rounding. Goal calculations preserve intermediate precision. Decimal values serialize
+as JSON strings. External requests have timeouts, bounded caches, cooldowns, and 429 handling.
+Search reports provider status on partial results and 503 when all requested providers
+fail and no local results exist. No live provider calls run in automated tests.
+
+Meal creation and item replacement are atomic. PATCH without `items` preserves snapshots;
+with `items`, it replaces the entire item list and calculates fresh snapshots from the
+catalog. Catalog changes alone never alter historical meals. Daily totals use the user's
+IANA timezone (UTC before onboarding), including daylight-saving boundaries. A nutrient
+total is null when any included item has an unknown value; an empty day's totals are zero.
+Targets are calculated from current weight, target weight, and chosen deficit using
+the approved PROVIA formulas. Preview maintenance before choosing a deficit, then save
+through the authenticated goal API. Relevant input changes create new goal snapshots.
+The dashboard reports remaining calorie/macro budgets without double subtraction.
+See [nutrition calculations](docs/nutrition-calculation.md) for exact formulas and safeguards.
+These are estimates, not clinically validated maintenance or dietary recommendations.
+
+## CORS, errors, and logging
+
+CORS accepts exact configured HTTP(S) origins, never wildcards. Credential support is
+opt-in. Common methods and Accept, Authorization, Content-Type are allowed; no response
+headers are exposed to browser JavaScript. CORS does not replace authentication.
+
+Application, HTTP, validation, and unexpected errors use:
 
 ```json
 {"error":{"code":"RESOURCE_NOT_FOUND","message":"Requested resource was not found","details":null}}
 ```
 
-Future modules can raise `AppError(code, message, status_code)` with static,
-client-safe text. HTTP exception details are replaced with safe status messages;
-HTTP response headers such as `WWW-Authenticate` are preserved. Validation errors
-return 422 with a list of source (body/query/path), error code, and generic message.
-Inputs, validator messages, contexts, and dynamic location segments are omitted
-because they may contain secrets. Unexpected exceptions return a generic 500.
-Debug mode never enables browser traceback pages.
+Validation details contain source and error code without sensitive inputs, dynamic
+location segments, or validator messages. HTTP exception headers are preserved.
+CORS preflight rejections retain Starlette's standard response format.
 
-## Logging
+Logs contain timestamp, level, environment, generated UUID request ID, method, route
+template, status, and duration. X-Request-ID is returned on responses. Incoming IDs are
+ignored; context variables isolate concurrent requests. Raw paths, query strings, bodies,
+tokens, settings, exception values, and tracebacks are excluded from application logs.
+Unexpected failures log a generic correlated message. Uvicorn access and HTTPX logging
+are suppressed to prevent raw URL/key logging. Use the documented no-access-log command.
+Middleware order keeps request IDs and CORS on sanitized 500 responses. Logging settings
+are process-wide; run one environment per worker.
 
-Standard Python logging emits timestamp, level, environment, request ID, method,
-route template, status, and duration in milliseconds. Unknown paths are logged as
-`<unmatched>`; route parameters are never logged. Each request gets a newly
-generated UUID v4 in `X-Request-ID`; supplied IDs are ignored. Context variables
-isolate IDs between concurrent requests and are reset when a request finishes.
-
-Bodies, query strings, authorization headers, exception values, and tracebacks
-are excluded. Unexpected failures emit a generic server error log correlated by
-request ID. This deliberately trades traceback detail for protection against
-secret-bearing exceptions. Uvicorn access logging is disabled to avoid a second
-log containing raw paths and queries; the run command also disables it explicitly.
-Repeated factory calls replace the owned console handler rather than duplicating
-it. Logging configuration is process-wide; run one environment per worker process.
-
-Middleware order is request logging, CORS, then sanitized error handling around
-routing. This keeps CORS and request IDs on generated 500 responses, following
-[Starlette's middleware ordering guidance](https://www.starlette.io/middleware/).
-Errors after a response has started are logged, but cannot replace its status/body.
-
-## Run the backend
-
-From `services/api`:
+## Tests and checks
 
 ```powershell
-python -m uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
-```
-
-- Health: <http://127.0.0.1:8000/api/v1/health>
-- Swagger UI: <http://127.0.0.1:8000/docs>
-
-Health response:
-
-```json
-{"status":"ok","service":"provia-api","version":"0.1.0"}
-```
-
-## Test and lint
-
-From `services/api`:
-
-```powershell
+# From services/api
+python -m uv sync
 python -m uv run pytest -v
 python -m uv run ruff check .
 python -m uv run ruff format --check .
 ```
 
-Optional coverage report:
+For PostgreSQL tests, set TEST_DATABASE_URL to a dedicated disposable direct connection
+and TEST_DATABASE_DISPOSABLE=true in `.env`. The database role must be able to create
+schemas. Tests use unique `provia_test_<uuid>` schemas, migrate them, and remove only
+those generated schemas. They never reset/drop the database. No SQLite substitution.
+
+Alternatively, on the configured **development** direct connection with CREATEDB rights:
 
 ```powershell
-python -m uv run pytest --cov=app --cov-report=term-missing
+python -m uv run python -m scripts.run_postgres_tests
 ```
 
-Tests use FastAPI TestClient and require no external services.
+This runner creates a fresh `provia_verify_<uuid>` database, runs the full suite there,
+and removes only that generated database in finally. It never resets the application DB.
+`python -m uv run python -m scripts.verify_services` performs read-only live checks and
+writes credential-free statuses to `docs/service-verification.json`.
+
+The Indian catalog ships empty because no verified licensed dataset was supplied.
+See the import contract in [architecture](docs/backend-architecture.md). Custom foods
+and food-specific household portions are supported now; no universal roti/katori weight
+or fabricated Indian nutrition data is bundled.
+
+```powershell
+python -m uv run pytest tests/integration -v
+python -m uv run pytest -m "not integration" -v
+```
+
+## Structure and further documentation
+
+```text
+apps/{mobile,test-web}/             # placeholders
+packages/api-client/               # placeholder
+services/api/
+  app/
+    main.py                        # factory / lifespan
+    core/                          # settings, auth, CORS, errors, logging
+    db/                            # typed schema, lazy engine, session dependency
+    api/v1/{router.py,endpoints/}   # versioned routing / health
+    modules/{users,profiles,nutrition}/ # routers, schemas, services, repositories
+    integrations/foods.py           # USDA / OFF adapters
+  alembic/{env.py,versions/,script.py.mako}
+  alembic.ini
+  tests/                           # isolated tests + opt-in PostgreSQL integration
+  .env.example
+  .python-version
+  pyproject.toml
+  uv.lock
+docs/
+  backend-architecture.md
+  database-schema.md
+  api-endpoints.md
+  nutrition-calculation.md
+  day1-completion-report.md
+```
+
+[Architecture](docs/backend-architecture.md) · [Schema](docs/database-schema.md) ·
+[Verification report and remaining configuration](docs/day1-completion-report.md).
+The report distinguishes implementation, mocks, and real-service verification; this
+backend has not been demonstrated production-ready.

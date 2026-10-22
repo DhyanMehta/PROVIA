@@ -1,0 +1,36 @@
+{
+  "neon_pooled": {
+    "status": "PASS",
+    "http_status": 200
+  },
+  "neon_direct": {
+    "status": "PASS",
+    "select_1": true,
+    "table_count": 18,
+    "revision": "0002",
+    "foreign_key_count": 20
+  },
+  "clerk_jwks": {
+    "status": "PASS",
+    "http_status": 200,
+    "rsa_keys_present": true
+  },
+  "clerk_session_end_to_end": {
+    "status": "BLOCKED",
+    "note": "No real session token supplied"
+  },
+  "usda": {
+    "status": "PASS",
+    "normalized_results": 9,
+    "note": "Live adapter request; not an authenticated API end-to-end test"
+  },
+  "open_food_facts": {
+    "status": "FAIL",
+    "note": "provider_unavailable",
+    "http_status": 503
+  },
+  "r2": {
+    "status": "NOT RUN",
+    "note": "Storage integration is not implemented; no storage operations performed"
+  }
+}
