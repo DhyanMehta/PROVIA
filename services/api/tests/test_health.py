@@ -1,13 +1,8 @@
 """Smoke tests for the API bootstrap."""
 
-from fastapi.testclient import TestClient
 
-from app.main import app
-
-
-def test_health() -> None:
-    with TestClient(app) as client:
-        response = client.get("/api/v1/health")
+def test_health(client) -> None:
+    response = client.get("/api/v1/health")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -17,9 +12,20 @@ def test_health() -> None:
     }
 
 
-def test_swagger_ui() -> None:
-    with TestClient(app) as client:
-        response = client.get("/docs")
+def test_swagger_ui(client) -> None:
+    response = client.get("/docs")
 
     assert response.status_code == 200
     assert "swagger-ui" in response.text
+
+
+def test_readiness(client) -> None:
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "service": "provia-api"}
+
+
+def test_openapi(client) -> None:
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    assert set(response.json()["paths"]) == {"/api/v1/health", "/api/v1/health/ready"}
