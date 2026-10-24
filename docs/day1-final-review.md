@@ -1,5 +1,9 @@
 # PROVIA Day 1 final review
 
+Historical report: the command block below predates the Windows SQLAlchemy repair.
+Do not run its ordinary sync/run commands in the repaired environment. Current safe
+commands use `uv run --no-sync`; follow [backend operations](backend-operations.md).
+
 Verified on 2026-10-22 in the existing repository, on branch `main`. Baseline was clean
 at `599bccb`, following `19d0085` and `79b920d`. No restart, frontend, or Day 2 work.
 

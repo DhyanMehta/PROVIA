@@ -1,5 +1,6 @@
 """Safe request metadata logging using request-local context."""
 
+import json
 import logging
 from contextvars import ContextVar
 from time import perf_counter
@@ -11,7 +12,24 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.core.config import Settings
 
 request_id_context: ContextVar[str] = ContextVar("request_id", default="-")
+error_category_context: ContextVar[str | None] = ContextVar("error_category", default=None)
 logger = logging.getLogger("provia.requests")
+
+
+class SafeJsonFormatter(logging.Formatter):
+    def format(self, record):
+        payload = {
+            "time": self.formatTime(record),
+            "level": record.levelname,
+            "environment": record.environment,
+            "request_id": record.request_id,
+            "message": record.getMessage(),
+            "error_category": error_category_context.get(),
+        }
+        for name in ("method", "route", "status", "duration_ms"):
+            if hasattr(record, name):
+                payload[name] = getattr(record, name)
+        return json.dumps(payload)
 
 
 class RequestContextFilter(logging.Filter):
@@ -40,11 +58,7 @@ def configure_logging(settings: Settings) -> None:
     handler = logging.StreamHandler()
     handler.set_name("provia-console")
     handler.addFilter(RequestContextFilter(settings.app_env))
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s env=%(environment)s request_id=%(request_id)s %(message)s"
-        )
-    )
+    handler.setFormatter(SafeJsonFormatter())
     app_logger.addHandler(handler)
     # Uvicorn's default access log contains raw paths and query strings.
     logging.getLogger("uvicorn.access").disabled = True
@@ -63,6 +77,7 @@ class RequestLoggingMiddleware:
             return
         request_id = str(uuid4())
         token = request_id_context.set(request_id)
+        error_token = error_category_context.set(None)
         start = perf_counter()
         status = 500
 
@@ -71,6 +86,8 @@ class RequestLoggingMiddleware:
             if message["type"] == "http.response.start":
                 status = message["status"]
                 MutableHeaders(scope=message)["X-Request-ID"] = request_id
+                MutableHeaders(scope=message)["X-Content-Type-Options"] = "nosniff"
+                MutableHeaders(scope=message)["Referrer-Policy"] = "no-referrer"
             await send(message)
 
         try:
@@ -81,11 +98,14 @@ class RequestLoggingMiddleware:
             method = scope["method"]
             if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
                 method = "OTHER"
+            duration = round((perf_counter() - start) * 1000, 2)
             logger.info(
                 "method=%s path=%s status=%s duration_ms=%.2f",
                 method,
                 path,
                 status,
-                (perf_counter() - start) * 1000,
+                duration,
+                extra={"method": method, "route": path, "status": status, "duration_ms": duration},
             )
+            error_category_context.reset(error_token)
             request_id_context.reset(token)

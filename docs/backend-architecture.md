@@ -1,5 +1,14 @@
 # Backend architecture
 
+Day3 keeps the modular monolith. `app/application.py` owns the factory without a
+default application instance; `app/main.py` remains the ASGI entry point and re-exports
+create_app. This lets the contracts exporter build an app with init-only settings,
+without reading environment or dotenv credentials. Middleware order is request
+logging/security headers → CORS → sanitized errors → bounded body buffering → routes.
+Database transactions still complete before successful responses. Error JSON and
+success payloads are preserved; OpenAPI now names the existing error envelope.
+See [operations](backend-operations.md) for limits and production follow-ups.
+
 ## Request flow
 
 `APIRouter → service → repository → SQLAlchemy model` in a modular monolith.

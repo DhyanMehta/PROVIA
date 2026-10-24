@@ -1,0 +1,15 @@
+{
+  "name": "@provia/api-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@10.9.7",
+  "scripts": {
+    "generate": "openapi-typescript openapi.json -o schema.d.ts",
+    "check": "openapi-typescript openapi.json -o schema.d.ts --check",
+    "typecheck": "tsc --noEmit --strict --skipLibCheck false schema.d.ts contract-test.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

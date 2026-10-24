@@ -1,5 +1,15 @@
 # API endpoints
 
+Day3 integration references: [frontend contracts](frontend-api-integration.md),
+[Health Connect sync](health-connect-integration.md), and [operations](backend-operations.md).
+Generated OpenAPI and TypeScript are in `packages/api-contracts`. Error responses are
+now explicitly described by ErrorEnvelope in OpenAPI; runtime JSON is unchanged.
+Decimal strings need not have fixed trailing zeros. Every response has X-Request-ID.
+Requests exceeding the configurable16MiB default body limit return413 REQUEST_TOO_LARGE
+before parsing; invalid/ambiguous Content-Length returns400 INVALID_CONTENT_LENGTH.
+No endpoint paths or success payloads changed in Day3. `/health/ready` retains startup
+readiness; `/health/db` is the database-dependent deployment readiness probe.
+
 Default prefix: `/api/v1`. Swagger is `/docs`, schema is `/openapi.json`.
 All routes below except health and calculation previews require a verified Bearer token. UUID IDs are
 server generated. Requests reject unknown fields. Decimal numbers are returned as

@@ -5,11 +5,34 @@ from http import HTTPStatus
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger("provia.errors")
+
+
+class ErrorDetail(BaseModel):
+    source: str
+    code: str
+    message: str
+
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    details: list[ErrorDetail] | None
+
+
+class ErrorEnvelope(BaseModel):
+    error: ErrorBody
+
+
+ERROR_RESPONSES = {
+    status: {"model": ErrorEnvelope, "description": HTTPStatus(status).phrase}
+    for status in (400, 401, 403, 404, 409, 413, 422, 500, 503)
+}
 
 
 class AppError(Exception):
@@ -29,6 +52,9 @@ def error_response(
     details: list[dict] | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
+    from app.core.logging import error_category_context
+
+    error_category_context.set(code)
     return JSONResponse(
         status_code=status,
         content={"error": {"code": code, "message": message, "details": details}},

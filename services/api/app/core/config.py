@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     app_env: Literal["development", "testing", "staging", "production"] = "development"
     debug: bool = False
+    max_request_body_bytes: int = Field(default=16 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
     api_v1_prefix: str = "/api/v1"
     cors_origins: list[str] = ["http://localhost:5173"]
     cors_allow_credentials: bool = False

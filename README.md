@@ -4,6 +4,12 @@ Android-first fitness and wellness tracking. Day 1 Tasks 1–8 implement the bac
 foundation, database schema, managed JWT authentication, onboarding, and nutrition.
 Day 2 adds exercise catalogs, workout plans/sessions/sets, water targets and logs,
 activity synchronization, sleep tracking, a unified dashboard and progress analytics.
+Day 3 hardens authentication and request handling, adds structured safe logs, and
+provides generated OpenAPI/TypeScript contracts plus Android integration runbooks.
+See [Day 3 report](docs/day3-completion-report.md),
+[frontend integration](docs/frontend-api-integration.md),
+[Health Connect contract](docs/health-connect-integration.md), and
+[operations](docs/backend-operations.md). Real Clerk/device verification remains pending.
 Mobile and test-web remain placeholders; frontend and AI functionality are not implemented.
 
 ## Existing Windows development environment
