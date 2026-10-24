@@ -1,5 +1,5 @@
 # Database schema
-Revision: `0003` (after `0002` and `0001_initial`). PostgreSQL only. 20 application tables; UUID primary keys and timezone-aware timestamps. Numeric/Decimal is used for physical measurements and nutrition. Application-created timestamps and transaction timezone are UTC.
+Revision: `0004` (after `0003`, `0002` and `0001_initial`). PostgreSQL only. 21 application tables; UUID primary keys and timezone-aware timestamps. Numeric/Decimal is used for physical measurements and nutrition. Application-created timestamps and transaction timezone are UTC.
 ## Integrity and lifecycle
 - Owned records refer to users; child records inherit ownership through their parent.
 - External catalogs are shared; custom foods/exercises have an owner. Catalog references use RESTRICT.
@@ -28,7 +28,23 @@ food IDs and store actual grams plus exact nutrient contributions. Recipe yield 
 be measured explicitly. Food-kind values distinguish unspecified, ingredient,
 prepared_dish and recipe. The original17 application tables remain intact.
 
+Migration0004 extends the existing nine tracking tables and adds only water_targets.
+Targets are unique per user/effective_date with positive amounts. Workout plans have
+one active row per user via a partial unique index. Schedule-day replacement uses
+SET NULL for linked sessions; plan_snapshot and exercise_name_snapshot preserve
+newly recorded history. Legacy snapshots stay null rather than fabricated.
+Legacy sets default to working, because older records have no kind field.
+Sleep imports have unique(user_id,source,external_id), allowing multiple null manual
+IDs. The application serializes overlap checks under a user lock. New activity,
+set and planned-target fields have nonnegative checks. Existing active-plan
+conflicts cause migration failure for operator review; migration does not choose
+or discard a user's plan. Four global starter exercises are inserted by fixed UUID
+without overwriting existing rows. Downgrade retains these catalog rows so existing
+references remain valid; downgrade is only tested on disposable databases.
+
+
 ## Tables
+
 
 ### users
 
@@ -44,6 +60,7 @@ Constraints: `pk_users`, `uq_users_auth_provider_subject`.
 
 Indexes: none.
 
+
 ### daily_activity
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -53,17 +70,23 @@ Indexes: none.
 | steps | INTEGER | False |  |
 | distance_m | NUMERIC(12, 3) | True |  |
 | source | VARCHAR(50) | False |  |
+| active_minutes | INTEGER | True |  |
+| activity_calories | NUMERIC(12, 3) | True |  |
+| synced_at | TIMESTAMP WITH TIME ZONE | True |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 | updated_at | TIMESTAMP WITH TIME ZONE | False |  |
 
-Constraints: `ck_daily_activity_distance_nonnegative`, `ck_daily_activity_steps_range`, `fk_daily_activity_user_id_users`, `pk_daily_activity`, `uq_daily_activity_user_id`.
+Constraints: `ck_daily_activity_activity_values`, `ck_daily_activity_distance_nonnegative`, `ck_daily_activity_steps_range`, `fk_daily_activity_user_id_users`, `pk_daily_activity`, `uq_daily_activity_user_id`.
+
+- Check: `active_minutes BETWEEN 0 AND 1440 AND activity_calories >= 0`
 
 - Check: `distance_m >= 0`
 
 - Check: `steps >= 0 AND steps <= 200000`
 
 Indexes: none.
+
 
 ### exercises
 
@@ -73,6 +96,13 @@ Indexes: none.
 | muscle_group | VARCHAR(100) | False |  |
 | equipment | VARCHAR(100) | False |  |
 | instructions | TEXT | True |  |
+| description | TEXT | True |  |
+| secondary_muscles | JSONB | False |  |
+| category | VARCHAR(30) | True |  |
+| movement_type | VARCHAR(100) | True |  |
+| difficulty | VARCHAR(30) | True |  |
+| media_reference | VARCHAR(1000) | True |  |
+| is_archived | BOOLEAN | False |  |
 | created_by_user_id | UUID | True | users.id (RESTRICT) |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
@@ -80,6 +110,7 @@ Indexes: none.
 Constraints: `fk_exercises_created_by_user_id_users`, `pk_exercises`.
 
 Indexes: `ix_exercises_created_by_user_id`, `ix_exercises_name`.
+
 
 ### fitness_goals
 
@@ -129,6 +160,7 @@ Constraints: `ck_fitness_goals_calculation_snapshot_complete`, `ck_fitness_goals
 
 Indexes: `ix_fitness_goals_user_created`, `uq_fitness_goals_active_user`.
 
+
 ### foods
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -169,6 +201,7 @@ Constraints: `ck_foods_curated_attribution`, `ck_foods_food_kind`, `ck_foods_nut
 
 Indexes: `ix_foods_aliases`, `ix_foods_created_by_user_id`, `ix_foods_name`.
 
+
 ### meal_logs
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -187,6 +220,7 @@ Constraints: `ck_meal_logs_meal_type`, `fk_meal_logs_user_id_users`, `pk_meal_lo
 
 Indexes: `ix_meal_logs_user_consumed`.
 
+
 ### sleep_sessions
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -195,14 +229,18 @@ Indexes: `ix_meal_logs_user_consumed`.
 | started_at | TIMESTAMP WITH TIME ZONE | False |  |
 | ended_at | TIMESTAMP WITH TIME ZONE | False |  |
 | source | VARCHAR(50) | False |  |
+| external_id | VARCHAR(200) | True |  |
+| stages | JSONB | True |  |
+| notes | TEXT | True |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 
-Constraints: `ck_sleep_sessions_sleep_duration`, `fk_sleep_sessions_user_id_users`, `pk_sleep_sessions`.
+Constraints: `ck_sleep_sessions_sleep_duration`, `fk_sleep_sessions_user_id_users`, `pk_sleep_sessions`, `uq_sleep_sessions_user_id`.
 
 - Check: `ended_at > started_at AND ended_at <= started_at + INTERVAL '24 hours'`
 
-Indexes: `ix_sleep_sessions_user_started`.
+Indexes: `ix_sleep_sessions_user_ended`, `ix_sleep_sessions_user_started`.
+
 
 ### user_profiles
 
@@ -232,6 +270,7 @@ Constraints: `ck_user_profiles_activity_level`, `ck_user_profiles_height_range`,
 
 Indexes: none.
 
+
 ### water_logs
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -247,6 +286,24 @@ Constraints: `ck_water_logs_amount_range`, `fk_water_logs_user_id_users`, `pk_wa
 - Check: `amount_ml > 0 AND amount_ml <= 10000`
 
 Indexes: `ix_water_logs_user_consumed`.
+
+
+### water_targets
+
+| Column | PostgreSQL type | Nullable | Reference |
+| --- | --- | --- | --- |
+| user_id | UUID | False | users.id (CASCADE) |
+| effective_date | DATE | False |  |
+| target_ml | NUMERIC(10, 3) | False |  |
+| id | UUID | False |  |
+| created_at | TIMESTAMP WITH TIME ZONE | False |  |
+
+Constraints: `ck_water_targets_target_range`, `fk_water_targets_user_id_users`, `pk_water_targets`, `uq_water_targets_user_id`.
+
+- Check: `target_ml > 0 AND target_ml <= 20000`
+
+Indexes: none.
+
 
 ### weight_logs
 
@@ -264,6 +321,7 @@ Constraints: `ck_weight_logs_weight_range`, `fk_weight_logs_user_id_users`, `pk_
 
 Indexes: `ix_weight_logs_user_recorded`.
 
+
 ### workout_plans
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -272,13 +330,15 @@ Indexes: `ix_weight_logs_user_recorded`.
 | name | VARCHAR(200) | False |  |
 | description | TEXT | True |  |
 | is_active | BOOLEAN | False |  |
+| goal | VARCHAR(200) | True |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 | updated_at | TIMESTAMP WITH TIME ZONE | False |  |
 
 Constraints: `fk_workout_plans_user_id_users`, `pk_workout_plans`.
 
-Indexes: `ix_workout_plans_user_id`.
+Indexes: `ix_workout_plans_user_id`, `uq_workout_plans_active_user`.
+
 
 ### food_portions
 
@@ -296,6 +356,7 @@ Constraints: `ck_food_portions_positive_grams`, `fk_food_portions_food_id_foods`
 
 Indexes: none.
 
+
 ### goal_transitions
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -309,6 +370,7 @@ Indexes: none.
 Constraints: `fk_goal_transitions_goal_id_fitness_goals`, `fk_goal_transitions_user_id_users`, `pk_goal_transitions`, `uq_goal_transitions_user_id`.
 
 Indexes: none.
+
 
 ### meal_items
 
@@ -333,6 +395,7 @@ Constraints: `ck_meal_items_positive_quantity`, `ck_meal_items_snapshots_nonnega
 
 Indexes: `ix_meal_items_food_id`, `ix_meal_items_meal_log_id`.
 
+
 ### recipes
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -350,6 +413,7 @@ Constraints: `ck_recipes_yield_range`, `fk_recipes_food_id_foods`, `fk_recipes_u
 
 Indexes: `ix_recipes_user_id`.
 
+
 ### workout_plan_days
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -357,6 +421,7 @@ Indexes: `ix_recipes_user_id`.
 | workout_plan_id | UUID | False | workout_plans.id (CASCADE) |
 | day_of_week | INTEGER | False |  |
 | name | VARCHAR(100) | False |  |
+| is_rest | BOOLEAN | False |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 
@@ -365,6 +430,7 @@ Constraints: `ck_workout_plan_days_day_range`, `fk_workout_plan_days_workout_pla
 - Check: `day_of_week BETWEEN 0 AND 6`
 
 Indexes: none.
+
 
 ### planned_exercises
 
@@ -375,14 +441,20 @@ Indexes: none.
 | order_index | INTEGER | False |  |
 | target_sets | INTEGER | False |  |
 | target_reps | INTEGER | False |  |
+| target_weight_kg | NUMERIC(8, 3) | True |  |
+| rest_seconds | INTEGER | True |  |
+| notes | TEXT | True |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 
-Constraints: `ck_planned_exercises_targets`, `fk_planned_exercises_exercise_id_exercises`, `fk_planned_exercises_workout_plan_day_id_workout_plan_days`, `pk_planned_exercises`, `uq_planned_exercises_workout_plan_day_id`.
+Constraints: `ck_planned_exercises_optional_targets`, `ck_planned_exercises_targets`, `fk_planned_exercises_exercise_id_exercises`, `fk_planned_exercises_workout_plan_day_id_workout_plan_days`, `pk_planned_exercises`, `uq_planned_exercises_workout_plan_day_id`.
+
+- Check: `target_weight_kg >= 0 AND rest_seconds >= 0`
 
 - Check: `order_index >= 0 AND target_sets > 0 AND target_reps > 0`
 
 Indexes: `ix_planned_exercises_exercise_id`.
+
 
 ### recipe_ingredients
 
@@ -406,6 +478,7 @@ Constraints: `ck_recipe_ingredients_nutrients_nonnegative`, `ck_recipe_ingredien
 
 Indexes: none.
 
+
 ### workout_sessions
 
 | Column | PostgreSQL type | Nullable | Reference |
@@ -416,6 +489,7 @@ Indexes: none.
 | completed_at | TIMESTAMP WITH TIME ZONE | True |  |
 | status | VARCHAR(20) | False |  |
 | notes | TEXT | True |  |
+| plan_snapshot | JSONB | True |  |
 | id | UUID | False |  |
 
 Constraints: `ck_workout_sessions_status`, `ck_workout_sessions_time_order`, `fk_workout_sessions_user_id_users`, `fk_workout_sessions_workout_plan_day_id_workout_plan_days`, `pk_workout_sessions`.
@@ -425,6 +499,7 @@ Constraints: `ck_workout_sessions_status`, `ck_workout_sessions_time_order`, `fk
 - Check: `completed_at >= started_at`
 
 Indexes: `ix_workout_sessions_user_started`, `ix_workout_sessions_workout_plan_day_id`.
+
 
 ### workout_sets
 
@@ -436,10 +511,22 @@ Indexes: `ix_workout_sessions_user_started`, `ix_workout_sessions_workout_plan_d
 | reps | INTEGER | False |  |
 | weight_kg | NUMERIC(8, 3) | False |  |
 | is_completed | BOOLEAN | False |  |
+| is_skipped | BOOLEAN | False |  |
+| kind | VARCHAR(20) | False |  |
+| duration_seconds | INTEGER | True |  |
+| rest_seconds | INTEGER | True |  |
+| notes | TEXT | True |  |
+| exercise_name_snapshot | VARCHAR(200) | True |  |
 | id | UUID | False |  |
 | created_at | TIMESTAMP WITH TIME ZONE | False |  |
 
-Constraints: `ck_workout_sets_values`, `fk_workout_sets_exercise_id_exercises`, `fk_workout_sets_workout_session_id_workout_sessions`, `pk_workout_sets`, `uq_workout_sets_workout_session_id`.
+Constraints: `ck_workout_sets_completion`, `ck_workout_sets_duration`, `ck_workout_sets_kind`, `ck_workout_sets_values`, `fk_workout_sets_exercise_id_exercises`, `fk_workout_sets_workout_session_id_workout_sessions`, `pk_workout_sets`, `uq_workout_sets_workout_session_id`.
+
+- Check: `NOT (is_completed AND is_skipped)`
+
+- Check: `duration_seconds >= 0 AND rest_seconds >= 0`
+
+- Check: `kind IN ('warmup','working')`
 
 - Check: `set_number > 0 AND reps >= 0 AND weight_kg >= 0`
 

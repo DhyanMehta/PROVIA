@@ -6,6 +6,116 @@ server generated. Requests reject unknown fields. Decimal numbers are returned a
 strings to preserve precision. Request timestamps must include an offset; stored
 timestamps are timezone-aware. The examples contain no credentials.
 
+## Day 2 tracking APIs
+
+Every endpoint in this section requires the existing verified Bearer authentication.
+UUIDs are server generated. Foreign/private resources return 404. All numeric
+Decimal response fields are strings, including analytics. OpenAPI includes typed
+request and response schemas for the new endpoints.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | /exercises | Shared + own unarchived exercises; q, muscle_group, equipment, category; limit/offset; name then ID sorting |
+| GET | /exercises/{exercise_id} | Visible exercise detail, including archived own records for historical references |
+| POST | /exercises/custom | Create a private exercise; 201 |
+| PATCH | /exercises/custom/{exercise_id} | Edit own custom exercise; shared entries cannot be edited |
+| DELETE | /exercises/custom/{exercise_id} | Archive own exercise; preserve references; 204 |
+| POST | /workout-plans | Create plan with nested schedule/exercises; activating deactivates the previous plan; 201 |
+| GET | /workout-plans | Own plans, newest first; limit/offset |
+| GET | /workout-plans/{plan_id} | Own complete schedule |
+| PATCH | /workout-plans/{plan_id} | Partial fields; supplied days replaces the complete schedule atomically |
+| DELETE | /workout-plans/{plan_id} | Remove schedule; preserve sessions and plan snapshots; 204 |
+| POST | /workout-plans/{plan_id}/duplicate | Copy own plan with new IDs, inactive; 201 |
+| POST | /workout-sessions | Start unplanned or reference an own workout_plan_day_id; 201 |
+| GET | /workout-sessions | Own sessions; date range and limit/offset |
+| GET | /workout-sessions/{session_id} | Own session, immutable plan snapshot and recorded sets |
+| PATCH | /workout-sessions/{session_id} | In-progress notes or status=cancelled only |
+| POST | /workout-sessions/{session_id}/complete | completed_at; requires every stored set completed/skipped; 409 on invalid transition |
+| POST | /workout-sessions/{session_id}/sets | Add a set referencing a visible unarchived exercise; 201 |
+| PATCH | /workout-sessions/{session_id}/sets/{set_id} | Edit set while session is in progress |
+| DELETE | /workout-sessions/{session_id}/sets/{set_id} | Remove set while in progress; 204 |
+| GET | /workouts/summary | Range totals, current week/month counts, duration, volume, consistency, records and daily points |
+| GET | /workouts/progress | Same structured range analytics contract |
+| GET | /workouts/exercises/{exercise_id}/history | Visible exercise history with actual sets and range-scoped personal records |
+| POST | /water-logs | amount_ml and consumed_at; 201 |
+| GET | /water-logs | Own logs, date range and limit/offset |
+| PATCH | /water-logs/{log_id} | Change amount and/or timestamp |
+| DELETE | /water-logs/{log_id} | Remove own log; 204 |
+| PUT | /water/target | effective_date and target_ml; create/replace that date's target |
+| GET | /water/dashboard | Required date; target, consumed, remaining, has_logs and daily logs |
+| PUT | /activity/daily | Full activity_date snapshot: steps, optional distance_m/active_minutes/activity_calories, source and synced_at |
+| GET | /activity/daily | Required date; own canonical row or null |
+| GET | /activity/summary | Observed days, total steps and dated records for a range |
+| POST | /sleep-sessions | started_at/ended_at/source; optional stages/notes; external_id required for Health Connect; 201 |
+| GET | /sleep-sessions | Own sessions filtered by wake-up local date; range and limit/offset |
+| GET | /sleep-sessions/{session_id} | Own session and elapsed duration_seconds |
+| PATCH | /sleep-sessions/{session_id} | Change times, stages or notes; source/import identity is fixed |
+| DELETE | /sleep-sessions/{session_id} | Remove own session; 204 |
+| GET | /sleep/summary | Wake-up-date duration points and sessions |
+| GET | /dashboard/today | Optional date, default today in profile timezone; combined nutrition/water/activity/sleep/workouts/weight |
+| GET | /progress/overview | Dated tracking and nutrition adherence, weight history/change, workout frequency/volume and water consistency |
+
+Range parameters are `start_date` and `end_date`, inclusive local dates. Defaults are
+the last 30 calendar days ending today. An omitted start with a supplied end means
+the 30 days ending at that end. Ranges must be ordered, at most 366 days, and years
+1900–9998. Timestamp filtering uses UTC boundaries calculated from the current
+profile timezone (UTC without a profile). List limits are 1–100, default20, offset>=0;
+tracking lists sort by timestamp then UUID ascending. Analytics caps each record
+query at10,000 rows and returns422 rather than silently dropping records.
+
+Example workout plan request:
+
+```json
+{"name":"Weekly training","is_active":true,"days":[
+  {"day_of_week":0,"name":"Pull","exercises":[
+    {"exercise_id":"00000000-0000-4000-8000-000000000003","order_index":0,
+     "target_sets":3,"target_reps":8,"target_weight_kg":"20","rest_seconds":90}
+  ]},
+  {"day_of_week":1,"name":"Rest","is_rest":true,"exercises":[]}
+]}
+```
+
+Days use0=Monday through6=Sunday; omitted days are unscheduled. Each day and exercise
+order must be unique. Plans support at most7 days and50 exercises per day. Rest days
+cannot contain exercises. Starting a rest-day session is422; start an unplanned
+session instead. Snapshot fields are server-owned. Completed/cancelled sessions
+cannot be reopened or edited. Completion time cannot precede start time; a completed
+empty workout is permitted. New sessions support at most500 sets.
+
+Set inputs: exercise_id, set_number, reps(default0), weight_kg(default0), kind
+(`working`/`warmup`), is_completed, is_skipped, duration_seconds, rest_seconds and notes.
+Completed sets require positive repetitions or duration and cannot be skipped.
+The same session/exercise/set_number cannot be duplicated. PATCH does not change
+exercise_id. Rest/load targets are nonnegative; set and repetition targets are
+positive, as documented by OpenAPI. Zero actual weight is valid for bodyweight
+or duration-based activity.
+
+Water logs accept more than0 and at most10,000ml; targets more than0 and at most20,000ml.
+These are input bounds, not recommended intake. No target is assumed. Remaining water
+is floored at0; has_logs distinguishes unlogged days from observed intake.
+
+Activity sources are `manual` (default) or `health_connect`. PUT is replacement,
+never addition. Health Connect supersedes manual data; manual-over-import is409.
+Health Connect requires synced_at. Older snapshots or equal timestamps with changed
+data are409; identical replay preserves the row ID. Steps may be0 and at most200,000;
+active_minutes is0–1440. Future synced_at beyond five minutes is422. Activity calories
+are never added to the existing nutrition budget.
+
+Sleep imports require stable external_id per user/source. Exact POST replay returns
+the existing record (201); changed replay is409 and requires PATCH. Overlap with any
+other own sleep session is409. Stages, when supplied, must be ordered, non-overlapping
+and inside the session; supported labels are awake/light/deep/rem/sleeping/unknown.
+Missing stages remain null; gaps are allowed. Duration is elapsed session time,
+including any awake-stage time, and is not an inferred sleep-stage measurement.
+
+Progress nutrition uses historical goal transitions, including pauses and same-day
+changes, with the Day1 policy unchanged. No logged meals yields null adherence;
+unknown calories also propagate null. Weight change is the last minus first observed
+measurement in the requested range, null with fewer than two measurements. Personal
+records are actual maxima within the selected range. No estimated1RM is reported.
+
+## Day 1 endpoints (preserved)
+
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | /health | 200 process liveness; original Task 1 JSON preserved |

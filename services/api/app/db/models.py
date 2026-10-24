@@ -306,6 +306,15 @@ class Exercise(Identity, Created, Base):
     muscle_group: Mapped[str] = mapped_column(String(100))
     equipment: Mapped[str] = mapped_column(String(100))
     instructions: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    secondary_muscles: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    category: Mapped[str | None] = mapped_column(String(30))
+    movement_type: Mapped[str | None] = mapped_column(String(100))
+    difficulty: Mapped[str | None] = mapped_column(String(30))
+    media_reference: Mapped[str | None] = mapped_column(String(1000))
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
@@ -313,12 +322,24 @@ class Exercise(Identity, Created, Base):
 
 class WorkoutPlan(Identity, Created, Updated, Base):
     __tablename__ = "workout_plans"
+    __table_args__ = (
+        Index(
+            "uq_workout_plans_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    goal: Mapped[str | None] = mapped_column(String(200))
+    days: Mapped[list["WorkoutPlanDay"]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan", order_by="WorkoutPlanDay.day_of_week"
+    )
 
 
 class WorkoutPlanDay(Identity, Created, Base):
@@ -332,6 +353,10 @@ class WorkoutPlanDay(Identity, Created, Base):
     )
     day_of_week: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(100))
+    is_rest: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    exercises: Mapped[list["PlannedExercise"]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan", order_by="PlannedExercise.order_index"
+    )
 
 
 class PlannedExercise(Identity, Created, Base):
@@ -339,6 +364,7 @@ class PlannedExercise(Identity, Created, Base):
     __table_args__ = (
         CheckConstraint("order_index >= 0 AND target_sets > 0 AND target_reps > 0", name="targets"),
         UniqueConstraint("workout_plan_day_id", "order_index"),
+        CheckConstraint("target_weight_kg >= 0 AND rest_seconds >= 0", name="optional_targets"),
     )
     workout_plan_day_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("workout_plan_days.id", ondelete="CASCADE")
@@ -349,6 +375,9 @@ class PlannedExercise(Identity, Created, Base):
     order_index: Mapped[int] = mapped_column(Integer)
     target_sets: Mapped[int] = mapped_column(Integer)
     target_reps: Mapped[int] = mapped_column(Integer)
+    target_weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    rest_seconds: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class WorkoutSession(Identity, Base):
@@ -366,6 +395,12 @@ class WorkoutSession(Identity, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="in_progress")
     notes: Mapped[str | None] = mapped_column(Text)
+    plan_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    sets: Mapped[list["WorkoutSet"]] = relationship(
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="WorkoutSet.created_at, WorkoutSet.id",
+    )
 
 
 class WorkoutSet(Identity, Created, Base):
@@ -373,6 +408,9 @@ class WorkoutSet(Identity, Created, Base):
     __table_args__ = (
         CheckConstraint("set_number > 0 AND reps >= 0 AND weight_kg >= 0", name="values"),
         UniqueConstraint("workout_session_id", "exercise_id", "set_number"),
+        CheckConstraint("kind IN ('warmup','working')", name="kind"),
+        CheckConstraint("NOT (is_completed AND is_skipped)", name="completion"),
+        CheckConstraint("duration_seconds >= 0 AND rest_seconds >= 0", name="duration"),
     )
     workout_session_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("workout_sessions.id", ondelete="CASCADE")
@@ -384,6 +422,12 @@ class WorkoutSet(Identity, Created, Base):
     reps: Mapped[int] = mapped_column(Integer)
     weight_kg: Mapped[Decimal] = mapped_column(Numeric(8, 3))
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_skipped: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    kind: Mapped[str] = mapped_column(String(20), default="working", server_default="working")
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    rest_seconds: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    exercise_name_snapshot: Mapped[str | None] = mapped_column(String(200))
 
 
 class DailyActivity(Identity, Created, Updated, Base):
@@ -392,12 +436,18 @@ class DailyActivity(Identity, Created, Updated, Base):
         UniqueConstraint("user_id", "activity_date"),
         CheckConstraint("steps >= 0 AND steps <= 200000", name="steps_range"),
         CheckConstraint("distance_m >= 0", name="distance_nonnegative"),
+        CheckConstraint(
+            "active_minutes BETWEEN 0 AND 1440 AND activity_calories >= 0", name="activity_values"
+        ),
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     activity_date: Mapped[date] = mapped_column(Date)
     steps: Mapped[int] = mapped_column(Integer)
     distance_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
     source: Mapped[str] = mapped_column(String(50))
+    active_minutes: Mapped[int | None] = mapped_column(Integer)
+    activity_calories: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SleepSession(Identity, Created, Base):
@@ -408,11 +458,16 @@ class SleepSession(Identity, Created, Base):
             name="sleep_duration",
         ),
         Index("ix_sleep_sessions_user_started", "user_id", "started_at"),
+        Index("ix_sleep_sessions_user_ended", "user_id", "ended_at"),
+        UniqueConstraint("user_id", "source", "external_id"),
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     source: Mapped[str] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(200))
+    stages: Mapped[list[dict] | None] = mapped_column(JSONB)
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class WaterLog(Identity, Created, Base):
@@ -424,3 +479,14 @@ class WaterLog(Identity, Created, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     amount_ml: Mapped[Decimal] = mapped_column(Numeric(10, 3))
     consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WaterTarget(Identity, Created, Base):
+    __tablename__ = "water_targets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "effective_date"),
+        CheckConstraint("target_ml > 0 AND target_ml <= 20000", name="target_range"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    effective_date: Mapped[date] = mapped_column(Date)
+    target_ml: Mapped[Decimal] = mapped_column(Numeric(10, 3))

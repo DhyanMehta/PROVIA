@@ -3,9 +3,9 @@
 ## Request flow
 
 `APIRouter → service → repository → SQLAlchemy model` in a modular monolith.
-Users, profiles/goals/weights, and nutrition have feature directories. Shared typed
-metadata lives in `app/db/models.py` to avoid circular model imports. Workout and
-activity models are schema-only; their APIs are not implemented on Day 1.
+Users, profiles/goals/weights, nutrition, workouts, tracking and insights have feature
+directories. Shared typed metadata lives in `app/db/models.py` to avoid circular
+model imports. Day 2 extends the existing tracking models rather than duplicating them.
 
 The factory builds a lazy Database manager and TokenVerifier. Importing the app
 does not open database or provider connections. Lifespan disposes the engine on
@@ -18,6 +18,65 @@ Each request gets one SQLAlchemy session. Function-scoped dependency cleanup com
 before sending success. Failure rolls back and closes the session. Constraint conflicts
 return sanitized 409, database failures 503. Repositories flush but do not commit;
 services can compose meal and item operations atomically.
+
+Day 2 uses the same CurrentUser and DbSession dependencies. Parent ownership is checked
+before accessing nested sets or schedule days; client user IDs are never accepted.
+User-row locks serialize plan activation, schedule edits, custom exercise changes,
+sleep overlap/import checks, activity sync and water-target changes. Session-row locks
+serialize set updates and completion. Set writes acquire user then session locks.
+PostgreSQL uniqueness constraints additionally enforce one active plan, one activity
+row per date, and one imported sleep ID per user/source. Invalid references roll back
+the whole request. Archived custom exercises remain available to existing histories
+but cannot be added to new plans or sets. Media references are stored, never fetched.
+
+Workout plan replacement is transactional; old day IDs are removed and session
+references become null through SET NULL. A JSON plan snapshot captured at session
+start preserves schedule details. Each recorded set snapshots the exercise name.
+Completed and cancelled sessions are immutable. Changing a catalog name or plan
+does not alter recorded set names or the plan snapshot.
+
+## Day 2 aggregation and synchronization
+
+Insights performs bounded batch reads across the requested local calendar dates;
+it does not issue one database query per day. Ranges default to 30 days, are inclusive,
+and are limited to 366 days. Each analytic record query is capped at 10,000 rows;
+larger results return 422 asking for a shorter range, never a truncated success.
+Lists use limit/offset pagination and stable ordering. The unified dashboard reuses
+the existing NutritionService; historical adherence uses the same last-transition-
+before-local-day-end policy and the same nutrient total calculation helper.
+
+Water targets are effective-date records with no default target. Replacing a target
+on the same date changes that date's target; earlier dates retain their applicable
+targets. Backdated changes are allowed and intentionally revise analytics from that
+effective date until the next target. Missing water logs carry has_logs=false;
+missing activity/sleep/weight and unlogged nutrition adherence remain null.
+
+Activity PUT replaces a full local-date snapshot; it never sums source totals.
+Health Connect takes precedence over manual data. Manual writes cannot overwrite
+a Health Connect row (409). Health Connect requires synced_at: older writes return
+409, identical timestamps/payloads return the existing row, and identical timestamps
+with differing content return 409. Later snapshots replace earlier values, allowing
+upstream corrections downward. This is backend storage, not mobile Health Connect
+integration. Activity calories are informational and never increase nutrition targets.
+
+Sleep is assigned to its wake-up date in the current profile timezone. All sessions
+must be non-overlapping, positive and at most 24 hours. Health Connect requires an
+external_id unique within user/source. Exact replay returns the existing session;
+changed replay returns 409 and must use PATCH. Optional stages must be chronological,
+non-overlapping and contained within the session. Unreported stages remain null;
+duration means elapsed session time (including any supplied awake stages), not an
+inferred physiological sleep estimate. Separate naps on the same date are summed.
+
+Workout analytics count completed sessions by local start date. Working-set volume
+is sum(weight_kg * reps) for completed, non-skipped working sets in completed sessions.
+Warmups, skipped sets, cancelled sessions and in-progress sessions are excluded.
+Duration-only/bodyweight sets contribute zero load volume. Personal records are
+observed maxima within the selected range, not lifetime or estimated one-rep maxima.
+Week/month counts independently use the current local Monday/month-start through today.
+Workout consistency is completed-workout days divided by all requested calendar days.
+Water consistency reports days met among observed log days with a configured target;
+unlogged days are unknown, not claimed failures or successes. Nutrition adherence is
+consumed calories / applicable target, not a medical or nutritional quality score.
 
 JWT verification runs before opening a session. Verified `sub` identifies the local
 user. Provisioning uses PostgreSQL ON CONFLICT against a unique subject; email is
@@ -101,7 +160,7 @@ after the operator confirms review. The flag is an attestation, not automatic fa
 
 ```powershell
 # From services/api, after verifying nutrition and rights for the supplied file:
-python -m uv run python -m scripts.import_indian_catalog path/to/licensed.json --confirm-licensed-and-verified
+python -m uv run --no-sync python -m scripts.import_indian_catalog path/to/licensed.json --confirm-licensed-and-verified
 ```
 
 Imports are atomic, capped at5MB/5000 records, deduplicated by source/ID, and batched.

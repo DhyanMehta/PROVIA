@@ -3,20 +3,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-import jwt
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from alembic import command
-from app.core.auth import TokenVerifier
-from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import FitnessGoal, Food, GoalTransition, MealLog, Recipe, User
 from app.modules.users.repository import UserRepository
@@ -24,43 +19,11 @@ from app.modules.users.repository import UserRepository
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture
-def authenticated_client(db_application):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    verifier = TokenVerifier(
-        Settings(
-            _env_file=None,
-            auth_issuer="https://test.example/",
-            auth_audience="provia",
-            auth_jwks_url="https://test.example/jwks",
-        )
-    )
-    client = jwt.PyJWKClient("https://test.example/jwks")
-    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
-    jwk.update(kid="integration", alg="RS256", use="sig")
-    client.fetch_data = lambda: {"keys": [jwk]}
-    verifier._client = client
-    db_application.state.token_verifier = verifier
-
-    def headers(subject="user-a"):
-        claims = {
-            "sub": subject,
-            "iss": "https://test.example/",
-            "aud": "provia",
-            "exp": datetime.now(UTC) + timedelta(minutes=5),
-        }
-        token = jwt.encode(claims, key, algorithm="RS256", headers={"kid": "integration"})
-        return {"Authorization": "Bearer " + token}
-
-    with TestClient(db_application) as api:
-        yield api, headers
-
-
 def test_migration_roundtrip_and_no_drift(pg_engine):
     with pg_engine.begin() as connection:
         tables = inspect(connection).get_table_names()
         assert set(Base.metadata.tables) <= set(tables)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
         for name, table in Base.metadata.tables.items():
             assert len(inspect(connection).get_foreign_keys(name)) == len(table.foreign_keys)
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []

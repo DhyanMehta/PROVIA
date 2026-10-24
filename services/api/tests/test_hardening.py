@@ -65,10 +65,20 @@ def test_network_failures_are_distinct(error, category):
     assert len(calls) == 3
 
 
-@pytest.mark.parametrize(
-    "retry_after", ["60", format_datetime(datetime.now(UTC) + timedelta(minutes=5))]
-)
+@pytest.mark.parametrize("retry_after", ["60", "http-date"])
 def test_long_retry_after_defers_without_sleep(retry_after, monkeypatch):
+    # Collection may precede this test by many minutes in the PostgreSQL suite.
+    # Freeze the provider's wall clock so the header never expires while waiting.
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+
+    monkeypatch.setattr("app.integrations.foods.datetime", FixedClock)
+    if retry_after == "http-date":
+        retry_after = format_datetime(now + timedelta(minutes=5))
     calls, sleeps = [], []
     monkeypatch.setattr("app.integrations.foods.sleep", sleeps.append)
 

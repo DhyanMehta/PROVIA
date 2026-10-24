@@ -2,8 +2,31 @@
 
 Android-first fitness and wellness tracking. Day 1 Tasks 1–8 implement the backend
 foundation, database schema, managed JWT authentication, onboarding, and nutrition.
-Mobile and test-web remain placeholders. Workout, activity, sleep, and water tables
-exist; their feature APIs and all AI functionality are outside this assignment.
+Day 2 adds exercise catalogs, workout plans/sessions/sets, water targets and logs,
+activity synchronization, sleep tracking, a unified dashboard and progress analytics.
+Mobile and test-web remain placeholders; frontend and AI functionality are not implemented.
+
+## Existing Windows development environment
+
+SQLAlchemy 2.1.6 is installed using its supported pure-Python source build under
+Windows Application Control. Preserve this installation: **do not run ordinary
+`uv sync` in this environment**. Use `uv run --no-sync` for Python, pytest, Ruff
+and Alembic commands (or `python -m uv run --no-sync` when uv is not on PATH).
+The generic clean-install instructions below are not a repair procedure for this
+managed environment. Never disable security controls or manually alter `.pyd` files.
+
+```powershell
+cd services/api
+uv run --no-sync python -m scripts.run_postgres_tests
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync alembic current
+uv run --no-sync alembic check
+```
+
+See [Day 2 completion report](docs/day2-completion-report.md) for verification,
+limitations and frontend integration readiness. Real Clerk client verification and
+verified reusable Indian nutrition data remain separate external blockers.
 
 ## Stack
 
@@ -13,7 +36,7 @@ intended database. Cloudflare R2 is reserved for later work. Planned mobile stac
 React Native, Expo, TypeScript, Expo Router, NativeWind, TanStack Query, Zustand,
 Expo SQLite, Android Health Connect.
 
-## Install and run
+## Clean installation on an approved environment
 
 From this repository in PowerShell:
 
@@ -24,7 +47,7 @@ python -m uv python install 3.12
 python -m uv sync --locked
 # Copy only if .env does not already exist:
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-python -m uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
+python -m uv run --no-sync uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
 Use `uv` instead of `python -m uv` when uv is installed as a standalone executable.
@@ -87,9 +110,9 @@ and database URLs use masked settings fields. Configuration is never returned by
 
 ```powershell
 # From services/api
-python -m uv run alembic upgrade head
-python -m uv run alembic current
-python -m uv run alembic check
+python -m uv run --no-sync alembic upgrade head
+python -m uv run --no-sync alembic current
+python -m uv run --no-sync alembic check
 ```
 
 Revision `0001_initial` creates the original17 MVP tables; `0002` adds goal snapshots
@@ -180,10 +203,10 @@ are process-wide; run one environment per worker.
 
 ```powershell
 # From services/api
-python -m uv sync
-python -m uv run pytest -v
-python -m uv run ruff check .
-python -m uv run ruff format --check .
+# Use the already provisioned environment; do not sync this managed installation.
+python -m uv run --no-sync pytest -v
+python -m uv run --no-sync ruff check .
+python -m uv run --no-sync ruff format --check .
 ```
 
 For PostgreSQL tests, set TEST_DATABASE_URL to a dedicated disposable direct connection
@@ -194,12 +217,12 @@ those generated schemas. They never reset/drop the database. No SQLite substitut
 Alternatively, on the configured **development** direct connection with CREATEDB rights:
 
 ```powershell
-python -m uv run python -m scripts.run_postgres_tests
+python -m uv run --no-sync python -m scripts.run_postgres_tests
 ```
 
 This runner creates a fresh `provia_verify_<uuid>` database, runs the full suite there,
 and removes only that generated database in finally. It never resets the application DB.
-`python -m uv run python -m scripts.verify_services` performs read-only live checks and
+`python -m uv run --no-sync python -m scripts.verify_services` performs read-only live checks and
 writes credential-free statuses to `docs/service-verification.json`.
 
 The Indian catalog ships empty because no verified licensed dataset was supplied.
@@ -208,8 +231,8 @@ and food-specific household portions are supported now; no universal roti/katori
 or fabricated Indian nutrition data is bundled.
 
 ```powershell
-python -m uv run pytest tests/integration -v
-python -m uv run pytest -m "not integration" -v
+python -m uv run --no-sync pytest tests/integration -v
+python -m uv run --no-sync pytest -m "not integration" -v
 ```
 
 ## Structure and further documentation

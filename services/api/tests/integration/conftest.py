@@ -1,17 +1,23 @@
 """Opt-in PostgreSQL tests. Each test owns a fresh, randomly named schema."""
 
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import jwt
 import pytest
 from alembic.config import Config
+from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from alembic import command
+from app.core.auth import TokenVerifier
+from app.core.config import Settings
 from app.db.session import postgres_url
 
 
@@ -56,3 +62,35 @@ def db_application(application, pg_engine):
     application.state.database._engine = pg_engine
     application.state.database._sessions = sessionmaker(pg_engine, expire_on_commit=False)
     return application
+
+
+@pytest.fixture
+def authenticated_client(db_application):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    verifier = TokenVerifier(
+        Settings(
+            _env_file=None,
+            auth_issuer="https://test.example/",
+            auth_audience="provia",
+            auth_jwks_url="https://test.example/jwks",
+        )
+    )
+    client = jwt.PyJWKClient("https://test.example/jwks")
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+    jwk.update(kid="integration", alg="RS256", use="sig")
+    client.fetch_data = lambda: {"keys": [jwk]}
+    verifier._client = client
+    db_application.state.token_verifier = verifier
+
+    def headers(subject="user-a"):
+        claims = {
+            "sub": subject,
+            "iss": "https://test.example/",
+            "aud": "provia",
+            "exp": datetime.now(UTC) + timedelta(minutes=5),
+        }
+        token = jwt.encode(claims, key, algorithm="RS256", headers={"kid": "integration"})
+        return {"Authorization": "Bearer " + token}
+
+    with TestClient(db_application) as api:
+        yield api, headers
