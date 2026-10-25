@@ -5,50 +5,47 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ApiProvider } from "../providers/api";
 import { validatePublicConfig } from "../lib/config";
-import { Busy, Copy, Page, Title } from "../components/ui";
+import { Copy, Page, Title } from "../components/ui";
+import { SessionGate } from "../components/session-gate";
 import { useTheme } from "../theme";
 
 function Navigation({ apiUrl }: { apiUrl: string }) {
   const { isLoaded, isSignedIn, userId } = useAuth();
   const { colors } = useTheme();
-  if (!isLoaded)
-    return (
-      <Page safeTop>
-        <Busy label="Restoring your secure session…" />
-      </Page>
-    );
   return (
-    <ApiProvider key={userId ?? "signed-out"} baseUrl={apiUrl}>
-      <StatusBar style="auto" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: colors.background },
-          headerTintColor: colors.text,
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: colors.background },
-        }}
-      >
-        <Stack.Screen
-          name="index"
-          options={{ title: "PROVIA", headerShown: false }}
-        />
-        <Stack.Protected guard={!isSignedIn}>
-          <Stack.Screen name="welcome" options={{ headerShown: false }} />
-        </Stack.Protected>
-        <Stack.Protected guard={!!isSignedIn}>
-          <Stack.Screen name="onboarding" options={{ title: "Your plan" }} />
+    <SessionGate loaded={isLoaded}>
+      <ApiProvider key={userId ?? "signed-out"} baseUrl={apiUrl}>
+        <StatusBar style="auto" />
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.background },
+            headerTintColor: colors.text,
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: colors.background },
+          }}
+        >
           <Stack.Screen
-            name="dashboard"
-            options={{ title: "PROVIA", headerBackVisible: false }}
+            name="index"
+            options={{ title: "PROVIA", headerShown: false }}
           />
-          <Stack.Screen name="profile" options={{ title: "Your profile" }} />
-          <Stack.Screen
-            name="next/[section]"
-            options={{ title: "Coming next" }}
-          />
-        </Stack.Protected>
-      </Stack>
-    </ApiProvider>
+          <Stack.Protected guard={!isSignedIn}>
+            <Stack.Screen name="welcome" options={{ headerShown: false }} />
+          </Stack.Protected>
+          <Stack.Protected guard={!!isSignedIn}>
+            <Stack.Screen name="onboarding" options={{ title: "Your plan" }} />
+            <Stack.Screen
+              name="dashboard"
+              options={{ title: "PROVIA", headerBackVisible: false }}
+            />
+            <Stack.Screen name="profile" options={{ title: "Your profile" }} />
+            <Stack.Screen
+              name="next/[section]"
+              options={{ title: "Coming next" }}
+            />
+          </Stack.Protected>
+        </Stack>
+      </ApiProvider>
+    </SessionGate>
   );
 }
 

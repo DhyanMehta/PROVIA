@@ -25,6 +25,11 @@ test("typed request attaches bearer and preserves decimal strings", async () => 
   );
 });
 
+test("an unrecorded activity day preserves the documented nullable success", async () => {
+  const api = createApiClient(base, async () => "token", async () => response(200, null));
+  await expect(api.request("get", "/api/v1/activity/daily")).resolves.toBeNull();
+});
+
 test.each([401, 403, 404, 409, 422, 429, 500, 503])(
   "safe error category and request ID for %s",
   async (status) => {
@@ -106,7 +111,7 @@ test("caller cancellation and timeout abort transport", async () => {
   );
   await expect(
     api.request("get", "/api/v1/me", { timeoutMs: 5 }),
-  ).rejects.toMatchObject({ code: "ABORTED" });
+  ).rejects.toMatchObject({ code: "TIMEOUT", category: "NETWORK_TIMEOUT" });
   const cancelled = new AbortController();
   cancelled.abort();
   await expect(
@@ -144,6 +149,165 @@ test("timeout settles a stuck Clerk token request before any HTTP write", async 
   const api = createApiClient(base, () => new Promise(() => {}), transport);
   await expect(
     api.request("get", "/api/v1/me", { timeoutMs: 5 }),
-  ).rejects.toMatchObject({ code: "ABORTED", uncertainWrite: false });
+  ).rejects.toMatchObject({
+    code: "TOKEN_TIMEOUT",
+    category: "TOKEN_TIMEOUT",
+    uncertainWrite: false,
+  });
   expect(transport).not.toHaveBeenCalled();
+});
+
+test.each([
+  [401, "HTTP_401", "AUTH_REJECTED"],
+  [403, "HTTP_403", "FORBIDDEN"],
+  [503, "AUTH_UNAVAILABLE", "AUTH_UNAVAILABLE"],
+  [503, "DATABASE_UNAVAILABLE", "DATABASE_UNAVAILABLE"],
+  [502, "HTTP_502", "BACKEND_UNAVAILABLE"],
+])(
+  "HTTP %s %s remains distinct from a network failure",
+  async (status, code, category) => {
+    const transport = jest
+      .fn()
+      .mockResolvedValue(response(status as number, { error: { code } }));
+    const api = createApiClient(base, async () => "fixture-token", transport);
+    const error = await api
+      .request("get", "/api/v1/me")
+      .catch((error) => error);
+    expect(error).toMatchObject({
+      status,
+      category,
+      diagnostic: { method: "GET", route: "/api/v1/me", phase: "response" },
+    });
+    expect(transport).toHaveBeenCalledTimes(status === 401 ? 2 : 1);
+    expect(errorMessage(error)).not.toContain("fixture-token");
+  },
+);
+
+test("a slow Render-like startup can finish within the existing GET deadline", async () => {
+  jest.useFakeTimers();
+  try {
+    const transport = jest.fn(
+      () =>
+        new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(response(200, { id: "user" })), 65000),
+        ),
+    );
+    const request = createApiClient(
+      base,
+      async () => "token",
+      transport,
+    ).request("get", "/api/v1/me");
+    await jest.advanceTimersByTimeAsync(65000);
+    expect((await request).id).toBe("user");
+    expect(transport).toHaveBeenCalledTimes(1);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("one deadline includes401 token refresh and transport that ignores abort", async () => {
+  const transport = jest.fn().mockResolvedValue(response(401));
+  const token = jest
+    .fn()
+    .mockResolvedValueOnce("expired")
+    .mockImplementation(() => new Promise(() => {}));
+  const api = createApiClient(base, token, transport);
+  await expect(
+    api.request("get", "/api/v1/me", { timeoutMs: 5 }),
+  ).rejects.toMatchObject({ code: "TOKEN_TIMEOUT", status: 401 });
+  expect(transport).toHaveBeenCalledTimes(1);
+  const stuck = createApiClient(
+    base,
+    async () => "token",
+    () => new Promise(() => {}),
+  );
+  await expect(
+    stuck.request("get", "/api/v1/me", { timeoutMs: 5 }),
+  ).rejects.toMatchObject({ code: "TIMEOUT", category: "NETWORK_TIMEOUT" });
+});
+
+test("response body consumption cannot keep the loading screen alive forever", async () => {
+  const api = createApiClient(
+    base,
+    async () => "token",
+    async () => ({ ...response(200), json: () => new Promise(() => {}) }),
+  );
+  await expect(
+    api.request("get", "/api/v1/me", { timeoutMs: 5 }),
+  ).rejects.toMatchObject({
+    code: "TIMEOUT",
+    status: 200,
+    diagnostic: { phase: "response" },
+  });
+});
+
+test("network failure, token failure, and invalid JSON have separate safe diagnostics", async () => {
+  for (const [transport, token, category] of [
+    [
+      jest.fn().mockRejectedValue(new Error("private health/token data")),
+      async () => "token",
+      "NETWORK_ERROR",
+    ],
+    [
+      jest.fn(),
+      async () => {
+        throw new Error("private Clerk payload");
+      },
+      "TOKEN_UNAVAILABLE",
+    ],
+    [
+      jest.fn().mockResolvedValue({
+        ...response(200),
+        json: async () => {
+          throw new SyntaxError("HTML private body");
+        },
+      }),
+      async () => "token",
+      "INVALID_RESPONSE",
+    ],
+  ] as const) {
+    const error = await createApiClient(base, token, transport)
+      .request("get", "/api/v1/me")
+      .catch((error) => error);
+    expect(error.category).toBe(category);
+    expect(errorMessage(error)).not.toContain("private");
+  }
+});
+
+test("arbitrary response error codes and request IDs are not reflected", async () => {
+  const api = createApiClient(
+    base,
+    async () => "token",
+    async () => ({
+      ...response(503, {
+        error: { code: "private-token-health", message: "private" },
+      }),
+      headers: new Headers({ "x-request-id": "unsafe.value" }),
+    }),
+  );
+  const error = await api.request("get", "/api/v1/me").catch((error) => error);
+  expect(error.code).toBe("HTTP_503");
+  expect(error.requestId).toBeNull();
+  expect(errorMessage(error)).not.toMatch(/private|unsafe/);
+});
+
+test("a mutation with unreadable success is uncertain and is never retried", async () => {
+  const transport = jest.fn().mockResolvedValue({
+    ...response(201),
+    json: async () => {
+      throw new Error();
+    },
+  });
+  const api = createApiClient(base, async () => "token", transport);
+  await expect(
+    api.request("post", "/api/v1/goals", {
+      body: {
+        target_weight_kg: "85",
+        selected_deficit_kcal: "500",
+        status: "active",
+        goal_type: "weight_loss",
+      },
+    }),
+  ).rejects.toMatchObject({ code: "INVALID_RESPONSE", uncertainWrite: true });
+  expect(transport).toHaveBeenCalledTimes(1);
 });

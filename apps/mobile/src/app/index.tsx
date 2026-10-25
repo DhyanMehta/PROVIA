@@ -1,17 +1,18 @@
 import { useAuth, useClerk } from "@clerk/expo";
 import { Redirect } from "expo-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Action, Busy, Copy, ErrorNote, Page, Title } from "../components/ui";
 import { useApi } from "../providers/api";
-import { loadSetup } from "../lib/onboarding";
+import { loadSetup, type SetupStep } from "../lib/onboarding";
 import { useResource } from "../hooks/use-resource";
 import { errorMessage } from "../lib/api-client";
 
 function ResolveAccount() {
   const api = useApi();
   const { signOut } = useClerk();
+  const [step, setStep] = useState<SetupStep>("session");
   const load = useCallback(
-    (signal: AbortSignal) => loadSetup(api, signal),
+    (signal: AbortSignal) => loadSetup(api, signal, setStep),
     [api],
   );
   const { data, error, reload } = useResource(load);
@@ -33,6 +34,13 @@ function ResolveAccount() {
       ) : (
         <>
           <Busy label="Connecting to your account…" />
+          <Copy>
+            {step === "session"
+              ? "Verifying session · GET /me"
+              : step === "profile"
+                ? "Loading profile · GET /profile"
+                : "Loading plan · GET /goals"}
+          </Copy>
           <Copy>
             A free backend can take around a minute to wake up. Your saved data
             stays in Neon.

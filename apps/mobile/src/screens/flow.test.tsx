@@ -2,6 +2,19 @@ import { fireEvent, render, screen } from "@testing-library/react-native";
 import Dashboard from "../app/dashboard";
 import Onboarding from "./onboarding";
 import { createApiClient } from "../lib/api-client";
+import Index from "../app/index";
+import Welcome from "../app/welcome";
+
+const mockAuth = { isSignedIn: true };
+const mockHostedAuth = jest.fn();
+const mockSignOut = jest.fn();
+jest.mock("@clerk/expo", () => ({
+  useAuth: () => mockAuth,
+  useClerk: () => ({ signOut: mockSignOut }),
+}));
+jest.mock("@clerk/expo/hosted-auth", () => ({
+  useHostedAuth: () => ({ startHostedAuth: mockHostedAuth }),
+}));
 
 jest.mock("expo-secure-store", () => {
   let value: string | null = null;
@@ -18,6 +31,10 @@ jest.mock("expo-secure-store", () => {
 jest.mock("expo-router", () => ({
   router: { replace: jest.fn(), push: jest.fn() },
   useFocusEffect: jest.fn(),
+  Redirect: ({ href }: { href: string }) => {
+    const { Text } = require("react-native");
+    return <Text>Redirect:{href}</Text>;
+  },
 }));
 jest.mock("../providers/api", () => ({ useApi: () => mockApi }));
 jest.mock("@expo/ui", () => {
@@ -62,6 +79,69 @@ const mockApi = createApiClient(
 
 afterEach(() => {
   jest.clearAllMocks();
+  mockAuth.isSignedIn = true;
+});
+
+test("restored session stops at an auth configuration failure and permits retry", async () => {
+  transport.mockResolvedValue(
+    reply({ error: { code: "AUTH_UNAVAILABLE" } }, 503),
+  );
+  await render(<Index />);
+  expect(
+    await screen.findByText(/AUTH_UNAVAILABLE; HTTP 503; GET \/api\/v1\/me/),
+  ).toBeTruthy();
+  expect(screen.queryByText("Connecting to your account…")).toBeNull();
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(mockSignOut).not.toHaveBeenCalled();
+  transport.mockImplementation(async (url: string) =>
+    url.endsWith("/me")
+      ? reply({ id: "user" })
+      : url.endsWith("/profile")
+        ? reply({}, 404)
+        : reply({ items: [] }),
+  );
+  await fireEvent.press(screen.getByText("Try again"));
+  expect(await screen.findByText("Redirect:/onboarding")).toBeTruthy();
+});
+
+test("invalid setup response is classified before profile or goals load", async () => {
+  transport.mockResolvedValue(reply({ unexpected: true }));
+  await render(<Index />);
+  expect(
+    await screen.findByText(/INVALID_RESPONSE; HTTP 200; GET \/api\/v1\/me/),
+  ).toBeTruthy();
+  expect(transport).toHaveBeenCalledTimes(1);
+});
+
+test("signed-out root redirects before requesting backend data", async () => {
+  mockAuth.isSignedIn = false;
+  await render(<Index />);
+  expect(await screen.findByText("Redirect:/welcome")).toBeTruthy();
+  expect(transport).not.toHaveBeenCalled();
+});
+
+test("hosted sign-in reports cancellation and preserves the SDK's default callback", async () => {
+  mockAuth.isSignedIn = false;
+  mockHostedAuth.mockResolvedValue({
+    createdSessionId: null,
+    authSessionResult: { type: "cancel" },
+  });
+  await render(<Welcome />);
+  await fireEvent.press(screen.getByText("I already have an account"));
+  expect(mockHostedAuth).toHaveBeenCalledWith({ mode: "sign-in" });
+  expect(await screen.findByText(/AUTH_CANCELLED/)).toBeTruthy();
+});
+
+test("hosted sign-up reports incomplete SDK session activation", async () => {
+  mockAuth.isSignedIn = false;
+  mockHostedAuth.mockResolvedValue({
+    createdSessionId: null,
+    authSessionResult: null,
+  });
+  await render(<Welcome />);
+  await fireEvent.press(screen.getByText("Create your account"));
+  expect(await screen.findByText(/AUTH_INCOMPLETE/)).toBeTruthy();
+  expect(mockSignOut).not.toHaveBeenCalled();
 });
 
 test("dashboard renders server values and missing-data states without invented metrics", async () => {

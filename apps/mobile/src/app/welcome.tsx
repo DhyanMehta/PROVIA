@@ -14,7 +14,16 @@ export default function Welcome() {
     setBusy(true);
     setError("");
     try {
-      await startHostedAuth({ mode });
+      const { createdSessionId, authSessionResult } = await startHostedAuth({
+        mode,
+      });
+      if (!createdSessionId)
+        setError(
+          authSessionResult?.type === "cancel" ||
+            authSessionResult?.type === "dismiss"
+            ? "Sign-in was cancelled. You can try again. [AUTH_CANCELLED]"
+            : "Clerk did not complete session activation. Try sign-in again. [AUTH_INCOMPLETE]",
+        );
     } catch {
       setError(
         "Clerk could not complete sign-in. Check your connection and Native API configuration, then try again.",

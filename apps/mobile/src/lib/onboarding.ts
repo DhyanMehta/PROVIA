@@ -25,6 +25,9 @@ async function activeGoal(api: ApiClient, signal?: AbortSignal) {
     const page = await api.request("get", "/api/v1/goals", {
       signal,
       query: { limit: 100, offset },
+      validate: (page) =>
+        Array.isArray(page.items) &&
+        page.items.every((goal) => goal && typeof goal.status === "string"),
     });
     const active = page.items.find((goal) => goal.status === "active");
     if (active) return active;
@@ -37,14 +40,25 @@ async function activeGoal(api: ApiClient, signal?: AbortSignal) {
   );
 }
 
-export async function loadSetup(api: ApiClient, signal?: AbortSignal) {
-  const me = await api.request("get", "/api/v1/me", { signal });
+export type SetupStep = "session" | "profile" | "goals";
+export async function loadSetup(
+  api: ApiClient,
+  signal?: AbortSignal,
+  onStep?: (step: SetupStep) => void,
+) {
+  onStep?.("session");
+  const me = await api.request("get", "/api/v1/me", {
+    signal,
+    validate: (me) => typeof me.id === "string" && !!me.id,
+  });
   let profile: Schema<"ProfileOut"> | null = null;
+  onStep?.("profile");
   try {
     profile = await api.request("get", "/api/v1/profile", { signal });
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 404)) throw error;
   }
+  onStep?.("goals");
   const active = await activeGoal(api, signal);
   return { me, profile, active };
 }

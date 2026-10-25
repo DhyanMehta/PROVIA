@@ -1,4 +1,11 @@
 import type { paths } from "./contracts";
+import {
+  failureCategory,
+  safeRequestId,
+  safeRoute,
+  safeServerCode,
+  type RequestDiagnostic,
+} from "./api-diagnostics";
 
 type Verb = "get" | "post" | "put" | "patch" | "delete";
 type Method<P extends keyof paths> = Extract<keyof paths[P], Verb>;
@@ -22,8 +29,8 @@ type Success<O> = O extends { responses: infer R }
   : never;
 type Token = (refresh?: boolean) => Promise<string | null>;
 
-function abortableToken(promise: Promise<string | null>, signal: AbortSignal) {
-  return new Promise<string | null>((resolve, reject) => {
+function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
     const cancel = () =>
       reject(
         new ApiError("Token request cancelled or timed out.", 0, "ABORTED"),
@@ -50,8 +57,12 @@ export class ApiError extends Error {
     public code = "NETWORK_ERROR",
     public requestId: string | null = null,
     public uncertainWrite = false,
+    public diagnostic?: RequestDiagnostic,
   ) {
     super(message);
+  }
+  get category() {
+    return failureCategory(this.status, this.code);
   }
 }
 
@@ -60,19 +71,45 @@ export function errorMessage(error: unknown): string {
     return "Something went wrong. Please try again.";
   const messages: Record<number, string> = {
     401: "Your session could not be verified. Sign in again.",
-    403: "Complete your Clerk account setup before continuing.",
+    403: "Access was denied. Your Clerk account may have pending setup steps.",
     404: "This record is unavailable.",
     409: "Your saved data changed. Reload before confirming.",
     422: "Check the values entered. The server could not accept them.",
     429: "Too many requests. Wait before retrying.",
   };
+  const categories: Partial<
+    Record<ReturnType<typeof failureCategory>, string>
+  > = {
+    AUTH_UNAVAILABLE:
+      "The backend cannot verify sessions right now. Check its Clerk configuration or identity-provider availability.",
+    DATABASE_UNAVAILABLE:
+      "The backend is reachable, but its database is unavailable.",
+    TOKEN_TIMEOUT:
+      "Clerk did not supply a session token in time. Check your connection and try again.",
+    TOKEN_UNAVAILABLE:
+      "Clerk could not supply a session token. Check your connection or sign in again.",
+    NETWORK_TIMEOUT:
+      "The backend did not respond in time. A Render cold start is possible; try again shortly.",
+    NETWORK_ERROR:
+      "Cannot reach the backend. Check your connection and try again.",
+    CANCELLED: "The request was cancelled.",
+    INVALID_RESPONSE: "The backend returned an invalid API response.",
+    BACKEND_UNAVAILABLE:
+      "The backend returned a server error. It may be starting; check its health and Render logs.",
+  };
   const text = error.uncertainWrite
     ? "The save result is unknown. Reconnect and reconcile before trying again."
-    : (messages[error.status] ??
-      (error.status >= 500
-        ? "The backend is unavailable. It may be waking up; try again shortly."
-        : error.message));
-  return text + (error.requestId ? ` Request ID: ${error.requestId}` : "");
+    : (categories[error.category] ?? messages[error.status] ?? error.message);
+  const context = error.diagnostic;
+  return (
+    text +
+    ` [${error.category}; HTTP ${error.status || "none"}` +
+    (context
+      ? `; ${context.method} ${context.route}; ${context.phase}; ${context.durationMs}ms`
+      : "") +
+    "]" +
+    (error.requestId ? ` Request ID: ${error.requestId}` : "")
+  );
 }
 
 export function createApiClient(
@@ -93,15 +130,24 @@ export function createApiClient(
       authenticated?: boolean;
       timeoutMs?: number;
       refresh?: boolean;
+      validate?: (data: Success<Operation<P, M>>) => boolean;
     } = {},
   ): Promise<Success<Operation<P, M>>> {
     const controller = new AbortController();
+    const started = Date.now();
+    let phase: RequestDiagnostic["phase"] = "token";
+    let timedOut = false;
+    let status = 0;
+    let requestId: string | null = null;
     pending.add(controller);
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) controller.abort();
     const timer = setTimeout(
-      abort,
+      () => {
+        timedOut = true;
+        abort();
+      },
       options.timeoutMs ?? (method === "get" ? 90000 : 45000),
     );
     let sent = false;
@@ -114,10 +160,10 @@ export function createApiClient(
         );
       if (controller.signal.aborted)
         throw new ApiError("Request cancelled or timed out.", 0, "ABORTED");
-      const token =
+      let token =
         options.authenticated === false
           ? null
-          : await abortableToken(getToken(options.refresh), controller.signal);
+          : await abortable(getToken(options.refresh), controller.signal);
       if (!active || !isCurrentSession())
         throw new ApiError(
           "The account session changed.",
@@ -137,47 +183,117 @@ export function createApiClient(
               .map(([key, value]) => [key, String(value)]),
           ).toString()
         : "";
-      const response = await transport(
-        baseUrl + path.replace(/^\/api\/v1/, "") + query,
-        {
-          method: method.toUpperCase(),
-          signal: controller.signal,
-          redirect: "error",
-          headers: {
-            Accept: "application/json",
-            ...(options.body ? { "Content-Type": "application/json" } : {}),
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-        },
-      );
-      if (
-        response.status === 401 &&
-        method === "get" &&
-        !options.refresh &&
-        options.authenticated !== false
-      )
-        return request(method, path, { ...options, refresh: true });
+      // A single deadline covers token acquisition, one GET token refresh,
+      // HTTP transport and body consumption. No automatic write retries.
+      let response: Response;
+      let refresh = !!options.refresh;
+      while (true) {
+        phase = "http";
+        response = await abortable(
+          transport(baseUrl + path.replace(/^\/api\/v1/, "") + query, {
+            method: method.toUpperCase(),
+            signal: controller.signal,
+            redirect: "error",
+            headers: {
+              Accept: "application/json",
+              ...(options.body ? { "Content-Type": "application/json" } : {}),
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+          }),
+          controller.signal,
+        );
+        status = response.status;
+        requestId = safeRequestId(response.headers.get("x-request-id"));
+        if (
+          response.status === 401 &&
+          method === "get" &&
+          !refresh &&
+          options.authenticated !== false
+        ) {
+          refresh = true;
+          phase = "token";
+          token = await abortable(getToken(true), controller.signal);
+          if (!active || !isCurrentSession())
+            throw new ApiError(
+              "The account session changed.",
+              401,
+              "SESSION_CHANGED",
+            );
+          if (!token)
+            throw new ApiError("Sign in to continue.", 401, "SESSION_REQUIRED");
+          continue;
+        }
+        break;
+      }
+      phase = "response";
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
+        const data = await abortable(response.json(), controller.signal).catch(
+          (error) => {
+            if (controller.signal.aborted) throw error;
+            return null;
+          },
+        );
         throw new ApiError(
           "Request failed.",
           response.status,
-          data?.error?.code ?? `HTTP_${response.status}`,
-          response.headers.get("x-request-id"),
+          safeServerCode(data?.error?.code, response.status),
+          requestId,
         );
       }
       if (response.status === 204) return undefined as Success<Operation<P, M>>;
-      return (await response.json()) as Success<Operation<P, M>>;
+      try {
+        const data: unknown = await abortable(
+          response.json(),
+          controller.signal,
+        );
+        // JSON null is a documented success for an unrecorded activity day.
+        // Apply shape checks only where the caller knows the endpoint schema.
+        if (
+          options.validate &&
+          !options.validate(data as Success<Operation<P, M>>)
+        )
+          throw new Error();
+        return data as Success<Operation<P, M>>;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new ApiError(
+          "Invalid API response.",
+          status,
+          "INVALID_RESPONSE",
+          requestId,
+          sent && method !== "get",
+        );
+      }
     } catch (error) {
-      if (error instanceof ApiError) throw error;
-      throw new ApiError(
-        "Cannot reach the backend. Check your connection and try again.",
-        0,
-        controller.signal.aborted ? "ABORTED" : "NETWORK_ERROR",
-        null,
-        sent && method !== "get",
-      );
+      const failure = controller.signal.aborted
+        ? new ApiError(
+            "Request cancelled or timed out.",
+            status,
+            timedOut
+              ? phase === "token"
+                ? "TOKEN_TIMEOUT"
+                : "TIMEOUT"
+              : "ABORTED",
+            requestId,
+            sent && method !== "get",
+          )
+        : error instanceof ApiError
+          ? error
+          : new ApiError(
+              "Request failed.",
+              status,
+              phase === "token" ? "TOKEN_UNAVAILABLE" : "NETWORK_ERROR",
+              requestId,
+              sent && method !== "get",
+            );
+      failure.diagnostic = {
+        method: method.toUpperCase(),
+        route: safeRoute(path),
+        phase,
+        durationMs: Date.now() - started,
+      };
+      throw failure;
     } finally {
       clearTimeout(timer);
       pending.delete(controller);
