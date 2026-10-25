@@ -1,0 +1,35 @@
+# Preparation only. User explicitly deferred deployment and database access.
+services:
+  - type: web
+    name: provia-sprint-api
+    runtime: python
+    plan: free
+    branch: main
+    rootDir: services/api
+    buildCommand: bash scripts/render_build.sh
+    startCommand: .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    healthCheckPath: /api/v1/health/db
+    autoDeployTrigger: off
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.15
+      - key: APP_ENV
+        value: staging
+      - key: DEBUG
+        value: 'false'
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        value: '[]'
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_ISSUER
+        sync: false
+      - key: AUTH_JWKS_URL
+        sync: false
+      - key: AUTH_AUTHORIZED_PARTIES
+        sync: false
+      - key: USDA_API_KEY
+        sync: false
+      - key: OFF_USER_AGENT
+        sync: false

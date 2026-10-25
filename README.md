@@ -10,7 +10,11 @@ See [Day 3 report](docs/day3-completion-report.md),
 [frontend integration](docs/frontend-api-integration.md),
 [Health Connect contract](docs/health-connect-integration.md), and
 [operations](docs/backend-operations.md). Real Clerk/device verification remains pending.
-Mobile and test-web remain placeholders; frontend and AI functionality are not implemented.
+The Android foundation now lives in `apps/mobile`: hosted Clerk authentication,
+onboarding and the initial dashboard use the generated API contracts. Live deployment,
+real-account verification and an installed APK remain pending; test-web is a placeholder.
+See [Sprint execution1 report](docs/sprint48-execution1-report.md) for verified results
+and the account/tooling handoff. AI functionality is not implemented.
 
 ## Existing Windows development environment
 

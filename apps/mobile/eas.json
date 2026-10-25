@@ -1,0 +1,15 @@
+{
+  "cli": { "version": ">=25.3.0", "appVersionSource": "local" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    },
+    "preview": {
+      "developmentClient": false,
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    }
+  }
+}
