@@ -7,7 +7,7 @@ services:
     branch: main
     rootDir: services/api
     buildCommand: bash scripts/render_build.sh
-    startCommand: .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    startCommand: .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log --no-proxy-headers
     healthCheckPath: /api/v1/health/db
     autoDeployTrigger: off
     envVars:
@@ -23,11 +23,23 @@ services:
         value: '[]'
       - key: DATABASE_URL
         sync: false
-      - key: AUTH_ISSUER
+      - key: AUTH_JWT_SECRET
         sync: false
-      - key: AUTH_JWKS_URL
+      - key: AUTH_TOKEN_ISSUER
+        value: https://provia-mag7.onrender.com
+      - key: AUTH_TOKEN_AUDIENCE
+        value: provia-mobile
+      - key: AUTH_ACCESS_SECONDS
+        value: '900'
+      - key: AUTH_REFRESH_DAYS
+        value: '30'
+      - key: AUTH_TRUSTED_PROXY_CIDRS
+        value: '[]'
+      - key: AUTH_EMAIL_PROVIDER
+        value: resend
+      - key: RESEND_API_KEY
         sync: false
-      - key: AUTH_AUTHORIZED_PARTIES
+      - key: RESEND_FROM
         sync: false
       - key: USDA_API_KEY
         sync: false

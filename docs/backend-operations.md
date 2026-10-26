@@ -1,5 +1,9 @@
 # Backend operations
 
+Current authentication and revision0005 operations are documented in the
+[first-party cutover runbook](first-party-auth-completion-report.md). Earlier Clerk
+probe references in this document are historical; runtime no longer uses JWKS.
+
 Run backend commands from `services/api`. Keep the existing Python3.12.15 environment,
 SQLAlchemy2.1.6 pure-Python build and uv.lock. Windows Application Control remains
 enabled. **Never run ordinary uv sync in this repaired environment.**

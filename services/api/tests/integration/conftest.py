@@ -5,20 +5,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-import jwt
 import pytest
 from alembic.config import Config
-from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from alembic import command
-from app.core.auth import TokenVerifier
-from app.core.config import Settings
+from app.db.auth_models import AuthAccount, AuthSession
+from app.db.models import User
 from app.db.session import postgres_url
+from app.modules.auth.security import AccessTokens, hash_password
+from tests.test_first_party_security import TEST_SECRET
 
 
 @pytest.fixture
@@ -65,31 +66,36 @@ def db_application(application, pg_engine):
 
 
 @pytest.fixture
-def authenticated_client(db_application):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    verifier = TokenVerifier(
-        Settings(
-            _env_file=None,
-            auth_issuer="https://test.example/",
-            auth_audience="provia",
-            auth_jwks_url="https://test.example/jwks",
-        )
-    )
-    client = jwt.PyJWKClient("https://test.example/jwks")
-    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
-    jwk.update(kid="integration", alg="RS256", use="sig")
-    client.fetch_data = lambda: {"keys": [jwk]}
-    verifier._client = client
-    db_application.state.token_verifier = verifier
+def authenticated_client(db_application, pg_engine):
+    db_application.state.settings.auth_jwt_secret = SecretStr(TEST_SECRET)
+    signer = AccessTokens(db_application.state.settings)
+    identities = {}
 
     def headers(subject="user-a"):
-        claims = {
-            "sub": subject,
-            "iss": "https://test.example/",
-            "aud": "provia",
-            "exp": datetime.now(UTC) + timedelta(minutes=5),
-        }
-        token = jwt.encode(claims, key, algorithm="RS256", headers={"kid": "integration"})
+        if subject not in identities:
+            now = datetime.now(UTC)
+            with Session(pg_engine) as db:
+                user = User(auth_provider_subject=subject)
+                db.add(user)
+                db.flush()
+                account = AuthAccount(
+                    user_id=user.id,
+                    email=subject + "@example.com",
+                    name="Integration test",
+                    password_hash=hash_password("integration-test-password"),
+                    status="active",
+                    email_verified_at=now,
+                )
+                db.add(account)
+                db.flush()
+                family = AuthSession(
+                    account_id=account.id, expires_at=now + timedelta(days=30), last_used_at=now
+                )
+                db.add(family)
+                db.flush()
+                identities[subject] = (user.id, family.id)
+                db.commit()
+        token = signer.issue(*identities[subject])
         return {"Authorization": "Bearer " + token}
 
     with TestClient(db_application) as api:

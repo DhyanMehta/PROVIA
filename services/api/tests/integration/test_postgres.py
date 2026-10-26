@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -13,8 +12,7 @@ from sqlalchemy.orm import Session
 
 from alembic import command
 from app.db.base import Base
-from app.db.models import FitnessGoal, Food, GoalTransition, MealLog, Recipe, User
-from app.modules.users.repository import UserRepository
+from app.db.models import FitnessGoal, Food, GoalTransition, MealLog, Recipe, User, WeightLog
 
 pytestmark = pytest.mark.integration
 
@@ -23,7 +21,7 @@ def test_migration_roundtrip_and_no_drift(pg_engine):
     with pg_engine.begin() as connection:
         tables = inspect(connection).get_table_names()
         assert set(Base.metadata.tables) <= set(tables)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
         for name, table in Base.metadata.tables.items():
             assert len(inspect(connection).get_foreign_keys(name)) == len(table.foreign_keys)
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
@@ -35,16 +33,36 @@ def test_migration_roundtrip_and_no_drift(pg_engine):
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
 
 
-def test_concurrent_provisioning(pg_engine):
-    def provision(_):
-        with Session(pg_engine) as session, session.begin():
-            return UserRepository(session).resolve("same-subject", None).id
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        ids = list(executor.map(provision, range(8)))
-    assert len(set(ids)) == 1
-    with Session(pg_engine) as session:
-        assert session.scalar(select(func.count()).select_from(User)) == 1
+def test_auth_upgrade_preserves_legacy_identity_and_fitness_records(pg_engine):
+    config = Config("alembic.ini")
+    with pg_engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0004")
+    user_id, weight_id = uuid4(), uuid4()
+    with Session(pg_engine) as db, db.begin():
+        db.add(User(id=user_id, auth_provider_subject="legacy-preserved", email="old@example.com"))
+        db.flush()
+        db.add(
+            WeightLog(
+                id=weight_id,
+                user_id=user_id,
+                weight_kg=Decimal("97"),
+                recorded_at=datetime.now(UTC),
+            )
+        )
+    with pg_engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+    with Session(pg_engine) as db:
+        assert db.get(User, user_id).auth_provider_subject == "legacy-preserved"
+        record = db.get(WeightLog, weight_id)
+        assert record.user_id == user_id and record.weight_kg == Decimal("97")
+    with pg_engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0004")
+    with Session(pg_engine) as db:
+        assert db.get(User, user_id) is not None and db.get(WeightLog, weight_id) is not None
 
 
 def test_profile_goal_weight_crud_and_isolation(authenticated_client):
@@ -350,7 +368,9 @@ def test_catalog_import_aliases_and_provider_search(
 
 def test_database_constraints(pg_engine):
     with Session(pg_engine) as session, session.begin():
-        user = UserRepository(session).resolve("constraint-test", None)
+        user = User(auth_provider_subject="constraint-test")
+        session.add(user)
+        session.flush()
         user_id = user.id
         session.add(FitnessGoal(user_id=user_id, goal_type="maintenance", status="active"))
     with pytest.raises(IntegrityError), Session(pg_engine) as session, session.begin():
@@ -608,7 +628,9 @@ def test_recipe_yield_portions_and_snapshots(authenticated_client, pg_engine):
 
 def test_goal_transition_constraints_and_deletion(pg_engine):
     with Session(pg_engine) as session, session.begin():
-        user = UserRepository(session).resolve("transition", None)
+        user = User(auth_provider_subject="transition")
+        session.add(user)
+        session.flush()
         goal = FitnessGoal(user_id=user.id, goal_type="maintenance", status="paused")
         session.add(goal)
         session.flush()

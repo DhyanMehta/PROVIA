@@ -1,4 +1,4 @@
-import { useClerk } from "@clerk/expo";
+import { useAuth } from "../providers/auth";
 import { router } from "expo-router";
 import { useCallback, useState } from "react";
 import { Alert, Platform } from "react-native";
@@ -20,7 +20,7 @@ import { useApi } from "../providers/api";
 
 export default function Profile() {
   const api = useApi();
-  const { signOut } = useClerk();
+  const { signOut } = useAuth();
   const load = useCallback(
     (signal: AbortSignal) => loadSetup(api, signal),
     [api],
@@ -99,6 +99,11 @@ export default function Profile() {
       )}
       {failure && <ErrorNote message={failure} />}
       <Action secondary label="Sign out" onPress={confirmExit} />
+      <Action
+        secondary
+        label="Account & sessions"
+        onPress={() => router.push("/account")}
+      />
     </Page>
   );
 }

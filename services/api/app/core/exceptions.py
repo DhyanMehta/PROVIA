@@ -31,7 +31,7 @@ class ErrorEnvelope(BaseModel):
 
 ERROR_RESPONSES = {
     status: {"model": ErrorEnvelope, "description": HTTPStatus(status).phrase}
-    for status in (400, 401, 403, 404, 409, 413, 422, 500, 503)
+    for status in (400, 401, 403, 404, 409, 413, 422, 429, 500, 503)
 }
 
 
@@ -63,7 +63,12 @@ def error_response(
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message)
+    headers = (
+        {"Retry-After": "900" if exc.code == "RATE_LIMITED" else "2"}
+        if exc.status_code == 429
+        else None
+    )
+    return error_response(exc.status_code, exc.code, exc.message, headers=headers)
 
 
 async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:

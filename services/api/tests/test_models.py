@@ -23,17 +23,20 @@ def test_migration_offline_sql(monkeypatch):
     assert "WHERE status = 'active'" in sql
     output.truncate(0)
     output.seek(0)
-    command.downgrade(config, "0004:base", sql=True)
+    command.downgrade(config, "0005:base", sql=True)
     for table in Base.metadata.tables:
         assert f"DROP TABLE {table}" in output.getvalue()
 
 
 def test_all_models_compile_for_postgresql():
     configure_mappers()
-    assert len(Base.metadata.tables) == 21
+    assert len(Base.metadata.tables) == 26
     for table in Base.metadata.sorted_tables:
         ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
-        assert "UUID" in ddl
+        if table.name == "auth_rate_limits":
+            assert list(table.primary_key.columns.keys()) == ["bucket"]
+        else:
+            assert "UUID" in ddl
         for column in table.columns:
             if column.name.endswith("_at"):
                 assert column.type.timezone

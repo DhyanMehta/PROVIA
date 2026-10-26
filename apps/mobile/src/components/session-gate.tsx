@@ -18,7 +18,7 @@ export function SessionGate({
     <Page safeTop>
       {expired ? (
         <>
-          <ErrorNote message="Clerk session initialization is taking too long. [SESSION_INITIALIZATION_TIMEOUT]" />
+          <ErrorNote message="Session initialization is taking too long. [SESSION_INITIALIZATION_TIMEOUT]" />
           <Copy>
             Check your connection. Session restoration can still finish; your
             saved session has not been cleared.

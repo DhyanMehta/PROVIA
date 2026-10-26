@@ -1,4 +1,15 @@
-# PROVIA backend
+# PROVIA
+
+Current authentication is first-party email/password with Argon2id, short-lived
+access JWTs and rotating server-backed refresh sessions. The mobile app includes
+authentication, existing onboarding/dashboard, account/session controls and fitness
+foundation screens. See the [first-party auth report and cutover runbook](docs/first-party-auth-completion-report.md)
+for the current contract, verification, deployment steps and unresolved release gates.
+Migration 0005 is prepared; it has **not** been applied to the existing application DB.
+Render deployment, an updated APK, real email delivery and device login remain pending.
+
+The Day 1–3 and sprint reports below record earlier milestones. Their Clerk setup
+instructions are historical and must not be used for this release.
 
 Android-first fitness and wellness tracking. Day 1 Tasks 1–8 implement the backend
 foundation, database schema, managed JWT authentication, onboarding, and nutrition.
@@ -9,10 +20,10 @@ provides generated OpenAPI/TypeScript contracts plus Android integration runbook
 See [Day 3 report](docs/day3-completion-report.md),
 [frontend integration](docs/frontend-api-integration.md),
 [Health Connect contract](docs/health-connect-integration.md), and
-[operations](docs/backend-operations.md). Real Clerk/device verification remains pending.
-The Android foundation now lives in `apps/mobile`: hosted Clerk authentication,
-onboarding and the initial dashboard use the generated API contracts. Live deployment,
-real-account verification and an installed APK remain pending; test-web is a placeholder.
+[operations](docs/backend-operations.md).
+The Android app lives in `apps/mobile`: first-party authentication, onboarding and
+fitness foundation screens use the generated API contracts. An updated first-party
+APK and real-account/device verification remain pending; test-web is a placeholder.
 See [Sprint execution1 report](docs/sprint48-execution1-report.md) for verified results
 and the account/tooling handoff. AI functionality is not implemented.
 
@@ -35,8 +46,8 @@ uv run --no-sync alembic check
 ```
 
 See [Day 2 completion report](docs/day2-completion-report.md) for verification,
-limitations and frontend integration readiness. Real Clerk client verification and
-verified reusable Indian nutrition data remain separate external blockers.
+limitations and frontend integration readiness. First-party cutover verification and
+verified reusable Indian nutrition data remain separate external dependencies.
 
 ## Stack
 
@@ -90,11 +101,13 @@ variables take precedence. Cached settings require a restart after changes.
 | LOG_LEVEL | DEBUG / INFO / WARNING / ERROR / CRITICAL; defaults to INFO or local DEBUG |
 | DATABASE_URL | Neon pooled PostgreSQL connection string for application traffic |
 | DIRECT_DATABASE_URL | Direct, non-pooler PostgreSQL URL for Alembic |
-| AUTH_ISSUER | Exact issuer of API access tokens |
-| AUTH_AUDIENCE | Optional; leave empty for Clerk session tokens without aud |
-| AUTH_JWKS_URL | Trusted HTTPS JWKS URL; derived for standard Clerk development issuers |
-| AUTH_AUTHORIZED_PARTIES | JSON array of permitted azp origins; default localhost:5173 |
-| AUTH_REQUIRE_AUTHORIZED_PARTY | false; reject missing azp when enabled |
+| AUTH_JWT_SECRET | Server-only signing secret; at least32 random bytes |
+| AUTH_TOKEN_ISSUER, AUTH_TOKEN_AUDIENCE | Required first-party JWT identity contract |
+| AUTH_ACCESS_SECONDS, AUTH_REFRESH_DAYS | 900seconds /30days by default |
+| AUTH_TRUSTED_PROXY_CIDRS | Empty until exact immediate proxy networks are verified |
+| AUTH_EMAIL_PROVIDER | resend for Render Free; smtp where permitted |
+| RESEND_API_KEY, RESEND_FROM | Optional HTTPS email key and permitted sender |
+| SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM | Optional verified-TLS SMTP adapter |
 | NUTRITION_MIN_DAILY_CALORIES | 1500; configurable product safeguard, not clinical validation |
 | FOOD_PROVIDER_CACHE_SECONDS | 300; process-local search cache |
 | FOOD_PROVIDER_MIN_INTERVAL_SECONDS | 6; per-provider request cooldown |
@@ -135,21 +148,15 @@ only in generated test schemas in a separately configured disposable test databa
 
 ## Authentication
 
-Configure Clerk's exact AUTH_ISSUER and optional AUTH_AUDIENCE for your token format.
-Standard `*.clerk.accounts.dev` issuers derive `/.well-known/jwks.json`; custom domains
-require AUTH_JWKS_URL. Only RS256 is accepted. Set AUTH_AUTHORIZED_PARTIES to trusted
-frontend origins; a present azp must match. Missing azp is accepted unless the require
-flag is enabled, accommodating non-browser clients. Pending sessions are rejected.
-The API verifies signature, issuer, configured audience, expiration, and subject; it does not use
-an unverified user ID. JWKS is cached for five minutes with a five-second fetch timeout.
-Unknown keys trigger a refresh. Missing bearer tokens return 401 with WWW-Authenticate;
-an unconfigured/unavailable provider returns 503. There is no development token bypass.
-
-Send `Authorization: Bearer <access-token>`. Local user provisioning is keyed by the
-provider subject and uses a PostgreSQL unique constraint plus ON CONFLICT to handle
-concurrent first logins. This deployment supports one issuer; migrating to another
-issuer requires an explicit identity migration. PATCH /me changes contact email only,
-not provider identity or sign-in credentials. No passwords are stored.
+Send `Authorization: Bearer <access-token>` from first-party login/refresh. The API
+validates HS256, mandatory issuer/audience/claims, signature, account status and
+persisted session revocation/expiry on each request. Passwords use Argon2id. Refresh
+credentials rotate atomically and only their hashes are stored. Fitness routes
+require verified email; account/security routes permit pending accounts. There is
+no development bypass or email-based legacy-account merge. PATCH /me changes contact
+email only, not sign-in credentials. Follow the
+[first-party auth runbook](docs/first-party-auth-completion-report.md) for all routes,
+email setup, legacy enrollment, migration and cutover/rollback instructions.
 
 ## Nutrition and API conventions
 
@@ -293,5 +300,5 @@ product API does not provide equivalent plain-text search. Retries are bounded a
 spaced, Retry-After is respected, and local/USDA results remain usable on failure.
 Configure OFF_USER_AGENT with an application/version and real operator contact before
 public deployment. FOOD_PROVIDER_STALE_SECONDS defaults to3600; stale results are labeled.
-Clerk JWKS refreshes for unknown keys respect PyJWT's30-second cooldown; valid cached
-keys remain usable. Live Clerk authentication still needs an actual client session.
+First-party cutover, real email delivery and a new device login remain pending the
+approvals and verification in the current authentication runbook.

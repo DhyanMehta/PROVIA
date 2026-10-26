@@ -66,24 +66,34 @@ def main():
     finally:
         if engine is not None:
             engine.dispose()
+    from app.modules.auth.email import create_delivery
+    from app.modules.auth.security import AccessTokens
+
     try:
-        if not settings.resolved_jwks_url:
-            raise ValueError
-        with httpx.Client(timeout=10) as client:
-            response = client.get(settings.resolved_jwks_url)
-            response.raise_for_status()
-            keys = response.json().get("keys", [])
-            valid = any(key.get("kty") == "RSA" for key in keys)
-            report["clerk_jwks"] = {
-                "status": "PASS" if valid else "FAIL",
-                "http_status": response.status_code,
-                "rsa_keys_present": valid,
-            }
+        AccessTokens(settings).secret()
+        report["first_party_signer"] = {
+            "status": "PASS",
+            "note": "Configuration valid; not a real-session test",
+        }
     except Exception:
-        report["clerk_jwks"] = {"status": "FAIL", "note": "JWKS unavailable or invalid"}
-    report["clerk_session_end_to_end"] = {
-        "status": "BLOCKED",
-        "note": "No real session token supplied",
+        report["first_party_signer"] = {
+            "status": "BLOCKED",
+            "note": "Signing configuration missing or invalid",
+        }
+    try:
+        create_delivery(settings).available()
+        report["email_configuration"] = {
+            "status": "PASS",
+            "note": "Configuration present; no email was sent",
+        }
+    except Exception:
+        report["email_configuration"] = {
+            "status": "BLOCKED",
+            "note": "Email delivery is not configured",
+        }
+    report["first_party_real_device"] = {
+        "status": "NOT VERIFIED",
+        "note": "No device login was performed",
     }
     for name, adapter in {"usda": USDAProvider, "open_food_facts": OpenFoodFactsProvider}.items():
         transport = ProbeTransport()

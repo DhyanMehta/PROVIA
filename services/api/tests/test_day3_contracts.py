@@ -7,20 +7,27 @@ from app.core.config import Settings
 from app.core.limits import RequestBodyLimitMiddleware
 from app.main import create_app
 from scripts.export_openapi import OUTPUT, schema_text
-from scripts.verify_clerk_session import probe
 
 
 def test_contracts_match_artifact_and_all_owned_routes_require_bearer(application):
     schema = application.openapi()
     assert json.loads(OUTPUT.read_text(encoding="utf-8")) == json.loads(schema_text())
     public = {
+        "/api/v1/auth/register",
+        "/api/v1/auth/login",
+        "/api/v1/auth/refresh",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/verify-email",
+        "/api/v1/auth/resend-verification",
+        "/api/v1/auth/forgot-password",
+        "/api/v1/auth/reset-password",
         "/api/v1/health",
         "/api/v1/health/ready",
         "/api/v1/health/db",
         "/api/v1/nutrition/calculate-maintenance",
         "/api/v1/nutrition/calculate-goals",
     }
-    assert len(schema["paths"]) == 47
+    assert len(schema["paths"]) == 60
     assert schema["components"]["securitySchemes"]["HTTPBearer"] == {
         "type": "http",
         "scheme": "bearer",
@@ -147,12 +154,7 @@ def test_health_semantics_do_not_hide_database_failure(client):
     assert client.get("/api/v1/health/db").status_code == 503  # deployment readiness probe
 
 
-def test_session_harness_rejects_non_development_targets():
-    import pytest
-
-    settings = Settings(_env_file=None, app_env="production")
-    with pytest.raises(ValueError):
-        probe(settings, "http://127.0.0.1:8000/api/v1", "never-send", "active")
-    settings = Settings(_env_file=None, auth_issuer="https://example.clerk.accounts.dev")
-    with pytest.raises(ValueError):
-        probe(settings, "https://remote.example/api/v1", "never-send", "active")
+def test_auth_actions_are_never_exposed_as_public_get_routes(application):
+    schema = application.openapi()
+    for name in ("verify-email", "reset-password", "refresh", "login"):
+        assert "get" not in schema["paths"]["/api/v1/auth/" + name]

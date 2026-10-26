@@ -1,5 +1,9 @@
 # Sprint48 deployment and account handoff
 
+> Historical deployment handoff. For this release use the
+> [first-party authentication cutover runbook](first-party-auth-completion-report.md).
+> Do not configure Clerk or run a migration/build from these earlier instructions.
+
 User chose preparation only. No public backend URL, account login, database permission
 or cloud build has been verified. Keep the ₹0 budget: never add a payment method,
 enable billing, select paid compute, buy credits or start an auto-converting trial.

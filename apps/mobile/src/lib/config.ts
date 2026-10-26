@@ -1,13 +1,12 @@
-export type PublicConfig = { apiUrl: string; clerkKey: string };
+export type PublicConfig = { apiUrl: string };
 
 export function validatePublicConfig(
   apiUrl: string | undefined,
-  clerkKey: string | undefined,
   development: boolean,
 ): PublicConfig {
-  if (!apiUrl || !clerkKey)
+  if (!apiUrl)
     throw new Error(
-      "Set EXPO_PUBLIC_API_URL and EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in apps/mobile/.env.local.",
+      "Set EXPO_PUBLIC_API_URL in apps/mobile/.env.local.",
     );
   const url = new URL(apiUrl);
   if (
@@ -29,7 +28,5 @@ export function validatePublicConfig(
     )
   )
     throw new Error("A standalone build cannot use a local backend address.");
-  if (!/^pk_(test|live)_[A-Za-z0-9_-]+$/.test(clerkKey))
-    throw new Error("Use a Clerk publishable key, never a secret key.");
-  return { apiUrl: apiUrl.replace(/\/$/, ""), clerkKey };
+  return { apiUrl: apiUrl.replace(/\/$/, "") };
 }

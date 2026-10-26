@@ -1,8 +1,7 @@
-import { ClerkProvider, useAuth } from "@clerk/expo";
-import { tokenCache } from "@clerk/expo/token-cache";
 import { Stack } from "expo-router/stack";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { AuthProvider, useAuth } from "../providers/auth";
 import { ApiProvider } from "../providers/api";
 import { validatePublicConfig } from "../lib/config";
 import { Copy, Page, Title } from "../components/ui";
@@ -10,7 +9,7 @@ import { SessionGate } from "../components/session-gate";
 import { useTheme } from "../theme";
 
 function Navigation({ apiUrl }: { apiUrl: string }) {
-  const { isLoaded, isSignedIn, userId } = useAuth();
+  const { isLoaded, isSignedIn, userId, user } = useAuth();
   const { colors } = useTheme();
   return (
     <SessionGate loaded={isLoaded}>
@@ -24,23 +23,28 @@ function Navigation({ apiUrl }: { apiUrl: string }) {
             contentStyle: { backgroundColor: colors.background },
           }}
         >
-          <Stack.Screen
-            name="index"
-            options={{ title: "PROVIA", headerShown: false }}
-          />
-          <Stack.Protected guard={!isSignedIn}>
-            <Stack.Screen name="welcome" options={{ headerShown: false }} />
-          </Stack.Protected>
-          <Stack.Protected guard={!!isSignedIn}>
-            <Stack.Screen name="onboarding" options={{ title: "Your plan" }} />
+          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="+not-found" options={{ title: "PROVIA" }} />
+          <Stack.Protected guard={isSignedIn}>
             <Stack.Screen
-              name="dashboard"
-              options={{ title: "PROVIA", headerBackVisible: false }}
+              name="account"
+              options={{ title: "Account & sessions" }}
             />
-            <Stack.Screen name="profile" options={{ title: "Your profile" }} />
+          </Stack.Protected>
+          <Stack.Protected guard={isSignedIn && !!user?.email_verified}>
+            <Stack.Screen
+              name="(onboarding)"
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="food-search"
+              options={{ title: "Food search" }}
+            />
             <Stack.Screen
               name="next/[section]"
-              options={{ title: "Coming next" }}
+              options={{ title: "Feature details" }}
             />
           </Stack.Protected>
         </Stack>
@@ -48,15 +52,10 @@ function Navigation({ apiUrl }: { apiUrl: string }) {
     </SessionGate>
   );
 }
-
 export default function Layout() {
   let config;
   try {
-    config = validatePublicConfig(
-      process.env.EXPO_PUBLIC_API_URL,
-      process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY,
-      __DEV__,
-    );
+    config = validatePublicConfig(process.env.EXPO_PUBLIC_API_URL, __DEV__);
   } catch (error) {
     return (
       <SafeAreaProvider>
@@ -67,19 +66,15 @@ export default function Layout() {
               ? error.message
               : "Public configuration is missing."}
           </Copy>
-          <Copy>
-            Account setup instructions are in docs/sprint48-deployment.md.
-            Restart Metro after changing public configuration.
-          </Copy>
         </Page>
       </SafeAreaProvider>
     );
   }
   return (
     <SafeAreaProvider>
-      <ClerkProvider publishableKey={config.clerkKey} tokenCache={tokenCache}>
+      <AuthProvider baseUrl={config.apiUrl}>
         <Navigation apiUrl={config.apiUrl} />
-      </ClerkProvider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

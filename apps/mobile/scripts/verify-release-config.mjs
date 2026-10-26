@@ -8,7 +8,6 @@ if (process.env.EAS_BUILD_PROFILE === "development") {
 }
 try {
   const url = new URL(process.env.EXPO_PUBLIC_API_URL ?? "");
-  const key = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
   if (
     url.protocol !== "https:" ||
     url.pathname !== "/api/v1" ||
@@ -21,13 +20,12 @@ try {
     )
   )
     throw new Error();
-  if (!/^pk_(test|live)_[A-Za-z0-9_-]+$/.test(key)) throw new Error();
   console.log(
     "Standalone public configuration is present; verify live backend separately.",
   );
 } catch {
   console.error(
-    "BLOCKED: standalone APK needs a configured public HTTPS /api/v1 URL and Clerk publishable key. No values printed.",
+    "BLOCKED: standalone APK needs a configured public HTTPS /api/v1 URL. No values printed.",
   );
   process.exit(2);
 }

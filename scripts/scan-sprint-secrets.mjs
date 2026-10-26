@@ -8,7 +8,7 @@ const workspace = fileURLToPath(new URL('..', import.meta.url));
 const values = parseEnv(readFileSync(join(workspace, 'services/api/.env'), 'utf8'));
 const secrets = new Set();
 for (const [name, value] of Object.entries(values)) {
-  if (value.length < 12 || !/API_KEY|SECRET|ACCESS_KEY_ID|DATABASE_URL/.test(name)) continue;
+  if (value.length < 12 || !/API_KEY|SECRET|ACCESS_KEY_ID|DATABASE_URL|PASSWORD/.test(name)) continue;
   secrets.add(value);
   if (name.includes('DATABASE_URL')) {
     try { const password = new URL(value).password; if (password) { secrets.add(password); secrets.add(decodeURIComponent(password)); } } catch { /* No config values in errors. */ }
@@ -19,7 +19,7 @@ const bundleFiles = [];
 function walk(directory) {
   try { for (const entry of readdirSync(directory, { withFileTypes: true })) { const path = join(directory, entry.name); if (entry.isDirectory()) walk(path); else bundleFiles.push(path); } } catch { /* Bundle may not yet exist. */ }
 }
-walk(join(workspace, 'apps/mobile/dist/android'));
+walk(join(workspace, 'apps/mobile/dist'));
 const hits = [];
 let scanned = 0;
 for (const file of [...files.map(file => join(workspace, file)), ...bundleFiles]) {

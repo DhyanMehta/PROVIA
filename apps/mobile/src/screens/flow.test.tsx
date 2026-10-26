@@ -1,20 +1,27 @@
 import { fireEvent, render, screen } from "@testing-library/react-native";
-import Dashboard from "../app/dashboard";
+import Dashboard from "./dashboard";
 import Onboarding from "./onboarding";
 import { createApiClient } from "../lib/api-client";
 import Index from "../app/index";
-import Welcome from "../app/welcome";
+import { Welcome, Login, Register, VerifyEmail, ResetPassword } from "./auth";
+import { Nutrition, Workouts, Tracking, Progress } from "./fitness";
 
-const mockAuth = { isSignedIn: true };
-const mockHostedAuth = jest.fn();
 const mockSignOut = jest.fn();
-jest.mock("@clerk/expo", () => ({
-  useAuth: () => mockAuth,
-  useClerk: () => ({ signOut: mockSignOut }),
-}));
-jest.mock("@clerk/expo/hosted-auth", () => ({
-  useHostedAuth: () => ({ startHostedAuth: mockHostedAuth }),
-}));
+const mockSignIn = jest.fn();
+const mockPublicRequest = jest.fn();
+let mockParams: { token?: string } = {};
+const mockAuth = {
+  logoutPending: false,
+  isSignedIn: true,
+  user: { email_verified: true },
+  signOut: mockSignOut,
+  session: {
+    signOut: mockSignOut,
+    signIn: mockSignIn,
+    publicApi: { request: mockPublicRequest },
+  },
+};
+jest.mock("../providers/auth", () => ({ useAuth: () => mockAuth }));
 
 jest.mock("expo-secure-store", () => {
   let value: string | null = null;
@@ -29,8 +36,9 @@ jest.mock("expo-secure-store", () => {
   };
 });
 jest.mock("expo-router", () => ({
-  router: { replace: jest.fn(), push: jest.fn() },
+  router: { replace: jest.fn(), push: jest.fn(), setParams: jest.fn() },
   useFocusEffect: jest.fn(),
+  useLocalSearchParams: () => mockParams,
   Redirect: ({ href }: { href: string }) => {
     const { Text } = require("react-native");
     return <Text>Redirect:{href}</Text>;
@@ -80,6 +88,66 @@ const mockApi = createApiClient(
 afterEach(() => {
   jest.clearAllMocks();
   mockAuth.isSignedIn = true;
+  mockAuth.user.email_verified = true;
+  mockAuth.logoutPending = false;
+  mockParams = {};
+});
+
+test("signed-out welcome exposes pending server revocation and cleanup retry", async () => {
+  mockAuth.isSignedIn = false;
+  mockAuth.logoutPending = true;
+  mockSignOut.mockResolvedValue(undefined);
+  await render(<Welcome />);
+  await fireEvent.press(screen.getByText("Retry sign-out cleanup"));
+  expect(mockSignOut).toHaveBeenCalledTimes(1);
+});
+
+test("an open verification screen consumes a newly received email link", async () => {
+  mockAuth.isSignedIn = false;
+  mockPublicRequest.mockResolvedValue({ message: "Email verified" });
+  const view = await render(<VerifyEmail />);
+  expect(screen.queryByText("Confirm email verification")).toBeNull();
+  mockParams = { token: "a-new-verification-link-token" };
+  await view.rerender(<VerifyEmail />);
+  await fireEvent.press(await screen.findByText("Confirm email verification"));
+  expect(mockPublicRequest).toHaveBeenCalledWith(
+    "post",
+    "/api/v1/auth/verify-email",
+    { authenticated: false, body: { token: mockParams.token } },
+  );
+  expect(require("expo-router").router.setParams).toHaveBeenCalledWith({
+    token: undefined,
+  });
+});
+
+test("an open reset screen accepts a new token and keeps invalid links blocked", async () => {
+  const view = await render(<ResetPassword />);
+  expect(screen.queryByLabelText("New password")).toBeNull();
+  mockParams = { token: "a-new-password-reset-link-token" };
+  await view.rerender(<ResetPassword />);
+  expect(await screen.findByLabelText("New password")).toBeTruthy();
+  mockParams = { token: "bad" };
+  await view.rerender(<ResetPassword />);
+  expect(screen.queryByLabelText("New password")).toBeNull();
+  expect(mockPublicRequest).not.toHaveBeenCalled();
+});
+
+test("a returning user with profile and canonical goal reaches dashboard", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(
+      url.endsWith("/me")
+        ? { id: "user" }
+        : url.endsWith("/profile")
+          ? { id: "profile" }
+          : {
+              items: [
+                { id: "goal", status: "active", calculation_method: "provia" },
+              ],
+            },
+    ),
+  );
+  await render(<Index />);
+  expect(await screen.findByText("Redirect:/dashboard")).toBeTruthy();
 });
 
 test("restored session stops at an auth configuration failure and permits retry", async () => {
@@ -120,28 +188,43 @@ test("signed-out root redirects before requesting backend data", async () => {
   expect(transport).not.toHaveBeenCalled();
 });
 
-test("hosted sign-in reports cancellation and preserves the SDK's default callback", async () => {
+test("welcome offers first-party login and registration navigation", async () => {
   mockAuth.isSignedIn = false;
-  mockHostedAuth.mockResolvedValue({
-    createdSessionId: null,
-    authSessionResult: { type: "cancel" },
-  });
   await render(<Welcome />);
   await fireEvent.press(screen.getByText("I already have an account"));
-  expect(mockHostedAuth).toHaveBeenCalledWith({ mode: "sign-in" });
-  expect(await screen.findByText(/AUTH_CANCELLED/)).toBeTruthy();
+  expect(require("expo-router").router.push).toHaveBeenCalledWith("/login");
 });
-
-test("hosted sign-up reports incomplete SDK session activation", async () => {
+test("pending verification redirects before reading fitness data", async () => {
+  mockAuth.user.email_verified = false;
+  await render(<Index />);
+  expect(await screen.findByText("Redirect:/verify-email")).toBeTruthy();
+  expect(transport).not.toHaveBeenCalled();
+});
+test("first-party login preserves password whitespace and navigates after success", async () => {
   mockAuth.isSignedIn = false;
-  mockHostedAuth.mockResolvedValue({
-    createdSessionId: null,
-    authSessionResult: null,
-  });
-  await render(<Welcome />);
-  await fireEvent.press(screen.getByText("Create your account"));
-  expect(await screen.findByText(/AUTH_INCOMPLETE/)).toBeTruthy();
-  expect(mockSignOut).not.toHaveBeenCalled();
+  mockSignIn.mockResolvedValue(undefined);
+  await render(<Login />);
+  await fireEvent.changeText(
+    screen.getByLabelText("Email"),
+    "test@example.com",
+  );
+  await fireEvent.changeText(
+    screen.getByLabelText("Password"),
+    "  a long password  ",
+  );
+  await fireEvent.press(screen.getByText("Sign in"));
+  expect(mockSignIn).toHaveBeenCalledWith(
+    "test@example.com",
+    "  a long password  ",
+  );
+  expect(require("expo-router").router.replace).toHaveBeenCalledWith("/");
+});
+test("registration validates confirmation before requesting credentials", async () => {
+  mockAuth.isSignedIn = false;
+  await render(<Register />);
+  await fireEvent.press(screen.getByText("Create account"));
+  expect(await screen.findByText(/Passwords must match/)).toBeTruthy();
+  expect(mockPublicRequest).not.toHaveBeenCalled();
 });
 
 test("dashboard renders server values and missing-data states without invented metrics", async () => {
@@ -176,8 +259,142 @@ test("dashboard renders server values and missing-data states without invented m
   expect(await screen.findByText("Nothing logged yet")).toBeTruthy();
   expect(screen.getByText("No water logged")).toBeTruthy();
   expect(screen.getByText("No sleep recorded")).toBeTruthy();
-  expect(screen.getByText("Not recorded")).toBeTruthy();
+  expect(screen.getAllByText("Not recorded")).toHaveLength(2);
+  expect(screen.getByText(/No weight measurement recorded/)).toBeTruthy();
   expect(screen.getAllByText("1828 kcal")).toHaveLength(2);
+});
+
+function emptyDay() {
+  const grams = { target_g: null, consumed_g: "0", remaining_g: null };
+  return {
+    date: "2026-10-26",
+    timezone: "Asia/Kolkata",
+    nutrition: {
+      meals: [],
+      calories: { target: null, consumed: "0", remaining: null },
+      protein: grams,
+      carbs: grams,
+      fat: grams,
+      fiber: grams,
+    },
+    water: { has_logs: false, consumed_ml: "0", target_ml: null },
+    activity: null,
+    workouts: { total_workouts: 0 },
+    sleep: { duration_seconds: null },
+    weight: null,
+  };
+}
+
+test("nutrition empty meal sections navigate to real catalog search", async () => {
+  transport.mockResolvedValue(reply(emptyDay()));
+  await render(<Nutrition />);
+  await screen.findByText("Breakfast");
+  expect(screen.getAllByText("No meals recorded here yet.")).toHaveLength(4);
+  await fireEvent.press(screen.getByText("Find food for breakfast"));
+  expect(require("expo-router").router.push).toHaveBeenCalledWith(
+    "/food-search",
+  );
+});
+
+test("workout foundation renders empty server catalogs before an explicit start", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(url.includes("/dashboard/today") ? emptyDay() : { items: [] }),
+  );
+  await render(<Workouts />);
+  expect(await screen.findByText("No workout plans yet.")).toBeTruthy();
+  expect(screen.getByText("No exercises available yet.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Start workout" }).props
+      .accessibilityState.disabled,
+  ).toBe(false);
+  expect(
+    transport.mock.calls.every(([, options]) => options.method === "GET"),
+  ).toBe(true);
+});
+
+test("workout start creates a real in-progress session once and does not claim completion", async () => {
+  transport.mockImplementation(async (url: string, options: RequestInit) =>
+    reply(
+      options.method === "POST"
+        ? {
+            id: "workout-a",
+            started_at: "2026-10-26T10:00:00Z",
+            status: "in_progress",
+          }
+        : url.includes("/dashboard/today")
+          ? emptyDay()
+          : { items: [] },
+      options.method === "POST" ? 201 : 200,
+    ),
+  );
+  await render(<Workouts />);
+  await fireEvent.press(await screen.findByText("Start workout"));
+  expect(await screen.findByText(/It is saved as in progress/)).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Workout started" }).props
+      .accessibilityState.disabled,
+  ).toBe(true);
+  expect(
+    transport.mock.calls.filter(([, options]) => options.method === "POST"),
+  ).toHaveLength(1);
+});
+
+test("a lost workout-start response is never automatically replayed", async () => {
+  transport.mockImplementation(async (url: string, options: RequestInit) => {
+    if (options.method === "POST") throw new Error("lost response");
+    return reply(url.includes("/dashboard/today") ? emptyDay() : { items: [] });
+  });
+  await render(<Workouts />);
+  await fireEvent.press(await screen.findByText("Start workout"));
+  expect(
+    await screen.findByText(/Starting again is blocked here/),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Start workout" }).props
+      .accessibilityState.disabled,
+  ).toBe(true);
+  expect(
+    transport.mock.calls.filter(([, options]) => options.method === "POST"),
+  ).toHaveLength(1);
+});
+
+test("tracking keeps unrecorded measurements distinct from logged zero steps", async () => {
+  const day = emptyDay();
+  transport.mockResolvedValue(
+    reply({ ...day, activity: { steps: 0, active_minutes: null } }),
+  );
+  await render(<Tracking />);
+  expect(await screen.findByText("0 steps")).toBeTruthy();
+  expect(screen.getAllByText("Not recorded").length).toBeGreaterThan(0);
+  expect(screen.getByText("No weight measurement recorded.")).toBeTruthy();
+});
+
+test("progress uses the backend calendar date and honest no-data states", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(
+      url.includes("/dashboard/today")
+        ? emptyDay()
+        : {
+            start_date: "2026-10-20",
+            end_date: "2026-10-26",
+            timezone: "Asia/Kolkata",
+            daily: [],
+            weight_history: [],
+            weight_change_kg: null,
+            water_consistency: { days_met: 0, observed_days_with_target: 0 },
+            workouts: { total_workouts: 0, active_days: 0 },
+          },
+    ),
+  );
+  await render(<Progress />);
+  expect(
+    await screen.findByText("Log weight over time to build your trend."),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Missing logs do not establish actual intake/),
+  ).toBeTruthy();
+  expect(transport.mock.calls[1][0]).toContain("start_date=2026-10-20");
+  expect(transport.mock.calls[1][0]).toContain("end_date=2026-10-26");
 });
 
 test("invalid form stays editable and does not call calculation or save endpoints", async () => {

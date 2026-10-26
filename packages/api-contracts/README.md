@@ -1,5 +1,10 @@
 # PROVIA API contracts
 
+Current export includes 60 paths and the first-party authentication endpoints.
+Use `AccountOut` for identity. The auth and workout session response names are
+qualified by FastAPI to avoid their `SessionOut` naming collision; prefer deriving
+types from each operation. See [auth contract and cutover](../../docs/first-party-auth-completion-report.md).
+
 These artifacts come from the FastAPI application, not hand-maintained DTOs. No
 frontend application or runtime SDK is included. `openapi.json` uses code defaults
 and does not load environment variables, dotenv files, credentials or live services.

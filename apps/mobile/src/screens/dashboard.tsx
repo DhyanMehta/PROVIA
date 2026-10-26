@@ -12,11 +12,13 @@ import {
 } from "../components/ui";
 import { useResource } from "../hooks/use-resource";
 import { useApi } from "../providers/api";
+import { useAuth } from "../providers/auth";
 import { errorMessage } from "../lib/api-client";
 import { metric } from "../lib/format";
 
 export default function Dashboard() {
   const api = useApi();
+  const { user } = useAuth();
   const load = useCallback(
     (signal: AbortSignal) =>
       api.request("get", "/api/v1/dashboard/today", { signal }),
@@ -51,6 +53,9 @@ export default function Dashboard() {
   const hasMeals = nutrition.meals.length > 0;
   return (
     <Page>
+      <Copy>
+        {user?.name ? `Welcome back, ${user.name}.` : "Welcome back."}
+      </Copy>
       <Title eyebrow={`${data.date} · ${data.timezone}`}>
         Your day, in focus.
       </Title>
@@ -100,6 +105,15 @@ export default function Dashboard() {
       </Card>
       <Card>
         <Value
+          label="Latest recorded weight"
+          value={metric(data.weight?.weight_kg, "kg")}
+        />
+        <Copy>
+          {data.weight
+            ? `Measured ${new Date(data.weight.recorded_at).toLocaleDateString()}. View Progress for your weight trend.`
+            : "No weight measurement recorded. Open Tracking to review your recorded signals."}
+        </Copy>
+        <Value
           label="Water"
           value={
             data.water.has_logs
@@ -144,9 +158,17 @@ export default function Dashboard() {
         <Action
           key={section}
           secondary
-          label={`${section} · next sprint phase`}
+          label={section}
           onPress={() =>
-            router.push({ pathname: "/next/[section]", params: { section } })
+            router.push(
+              section === "Nutrition"
+                ? "/nutrition"
+                : section === "Workouts"
+                  ? "/workouts"
+                  : section === "Tracking"
+                    ? "/tracking"
+                    : "/progress",
+            )
           }
         />
       ))}

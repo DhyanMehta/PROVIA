@@ -68,8 +68,9 @@ def configure_logging(settings: Settings) -> None:
 
 
 class RequestLoggingMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, auth_prefix: str = "/api/v1/auth") -> None:
         self.app = app
+        self.auth_prefix = auth_prefix
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -88,6 +89,9 @@ class RequestLoggingMiddleware:
                 MutableHeaders(scope=message)["X-Request-ID"] = request_id
                 MutableHeaders(scope=message)["X-Content-Type-Options"] = "nosniff"
                 MutableHeaders(scope=message)["Referrer-Policy"] = "no-referrer"
+                if scope["path"].startswith(self.auth_prefix + "/"):
+                    MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+                    MutableHeaders(scope=message)["Pragma"] = "no-cache"
             await send(message)
 
         try:

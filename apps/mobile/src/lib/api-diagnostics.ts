@@ -42,6 +42,12 @@ export function safeServerCode(value: unknown, status: number) {
       "INTERNAL_SERVER_ERROR",
       "RESOURCE_NOT_FOUND",
       "VALIDATION_ERROR",
+      "ACCOUNT_DISABLED",
+      "EMAIL_NOT_VERIFIED",
+      "EMAIL_UNAVAILABLE",
+      "INVALID_ACTION",
+      "RATE_LIMITED",
+      "INVALID_AUTHENTICATION",
     ].includes(value)
     ? value
     : `HTTP_${status}`;
@@ -59,6 +65,19 @@ export function safeRoute(path: string) {
     "/api/v1/health/db",
     "/api/v1/nutrition/calculate-maintenance",
     "/api/v1/nutrition/calculate-goals",
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/refresh",
+    "/api/v1/auth/logout",
+    "/api/v1/auth/logout-all",
+    "/api/v1/auth/me",
+    "/api/v1/auth/sessions",
+    "/api/v1/auth/sessions/{session_id}",
+    "/api/v1/auth/verify-email",
+    "/api/v1/auth/resend-verification",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+    "/api/v1/auth/change-password",
   ].includes(path)
     ? path
     : "<api-route>";

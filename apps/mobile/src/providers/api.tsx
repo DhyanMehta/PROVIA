@@ -1,24 +1,33 @@
-import { useAuth, useClerk } from "@clerk/expo";
+import { useAuth } from "./auth";
 import { fetch as expoFetch } from "expo/fetch";
 import { createContext, useContext, useLayoutEffect, useMemo } from "react";
 import type { PropsWithChildren } from "react";
-import { createApiClient, type ApiClient } from "../lib/api-client";
+import {
+  createApiClient,
+  errorMessage,
+  type ApiClient,
+} from "../lib/api-client";
 const Context = createContext<ApiClient | null>(null);
 export function ApiProvider({
   children,
   baseUrl,
 }: PropsWithChildren<{ baseUrl: string }>) {
-  const { getToken, userId } = useAuth();
-  const clerk = useClerk();
+  const { getToken, userId, session } = useAuth();
+  const generation = session.getGeneration();
   const api = useMemo(
     () =>
       createApiClient(
         baseUrl,
-        (refresh) => getToken({ skipCache: !!refresh }),
+        getToken,
         expoFetch as typeof fetch,
-        () => (clerk.user?.id ?? null) === (userId ?? null),
+        () =>
+          session.getGeneration() === generation &&
+          (session.getSnapshot().user?.id ?? null) === (userId ?? null),
+        (error) => {
+          void session.clear(errorMessage(error)).catch(() => {});
+        },
       ),
-    [baseUrl, getToken, userId, clerk],
+    [baseUrl, getToken, userId, session, generation],
   );
   useLayoutEffect(() => {
     api.resume();

@@ -1,6 +1,8 @@
 # PROVIA Android foundation
 
-Expo SDK58 / React Native0.88, TypeScript and Expo Router. This app implements the first profile-to-dashboard flow using existing generated backend contracts. Other feature routes explicitly show that they are coming next.
+Expo SDK58 / React Native0.88, TypeScript and Expo Router. First-party authentication
+replaces the hosted provider. Existing onboarding and canonical nutrition previews
+remain; six tabs expose dashboard, nutrition, workouts, tracking, progress and profile.
 
 From apps/mobile:
 
@@ -12,10 +14,23 @@ npm test
 npm start
 ```
 
-Set only EXPO_PUBLIC_API_URL and EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in ignored .env.local. Missing configuration displays a setup state; no fake backend or token is supplied. Standalone builds require a verified public HTTPS API.
+Set only `EXPO_PUBLIC_API_URL=https://provia-mag7.onrender.com/api/v1` in ignored
+`.env.local` and the EAS preview environment. Never expose signing secrets, database
+URLs, email API keys or passwords through Expo public variables.
 
-Clerk hosted authentication uses its supported SecureStore token cache and config plugin. Goal writes also keep an encrypted, account-scoped pending intent so unknown outcomes cannot silently repost. No backend secrets belong in this app.
+Refresh credentials use expo-secure-store; access tokens stay in memory. Refresh is
+single-flight, and uncertain rotations require sign-in rather than replay. Logout
+clears local state and revokes the server family, with a signed-out retry action for
+cleanup/revocation failures. Goal writes retain their encrypted account-scoped pending
+intent. Pending email verification cannot open fitness routes.
 
-See ../../docs/sprint48-deployment.md for account, APK and device instructions; ../../docs/sprint48-device-checklist.md for real verification. Native prebuild and JavaScript bundle export are not proof of an APK or physical installation. Backend application-control approval, real account configuration, SDK/JDK or a verified free EAS quota are still needed.
+See [current auth and cutover runbook](../../docs/first-party-auth-completion-report.md).
+The new backend and revision0005 must be approved and deployed before this app can
+authenticate. Email delivery is not configured. Native prebuild/Hermes export do not
+verify an APK or physical installation. Existing EAS identity/signing is retained.
+
+Fitness pages use existing APIs and honest loading/empty/error states. Food search
+is read-only; meal entry, workout logging and device synchronization controls remain
+future UI work. Unimplemented controls are visibly disabled.
 
 Development APK requires Metro; preview APK is standalone. Health Connect v4 integration is planned for execution2 and requires a custom native build. The current architecture supports that path without requesting health permissions yet.

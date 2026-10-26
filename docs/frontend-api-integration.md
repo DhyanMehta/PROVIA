@@ -1,5 +1,10 @@
 # Frontend API integration
 
+> Historical Day3 contract notes. Authentication is superseded by the
+> [first-party authentication report](first-party-auth-completion-report.md).
+> Current tokens use mandatory issuer/audience and persisted revocation checks;
+> Clerk configuration and the old path count below no longer apply.
+
 Day3 provides backend contracts for Expo React Native Android development. It does
 not implement a frontend. Real Clerk session and Health Connect device verification
 are still pending; automated signed-token tests are not substitutes.

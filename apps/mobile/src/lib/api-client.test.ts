@@ -8,6 +8,98 @@ const response = (status: number, data: unknown = {}) =>
     headers: new Headers({ "x-request-id": "safe-request-id" }),
   }) as Response;
 
+test.each([
+  [401, "INVALID_AUTHENTICATION", true],
+  [403, "ACCOUNT_DISABLED", true],
+  [403, "EMAIL_NOT_VERIFIED", false],
+])(
+  "final auth rejection %s/%s only clears a rejected current session",
+  async (status, code, clears) => {
+    const rejected = jest.fn();
+    const api = createApiClient(
+      base,
+      async () => "token",
+      jest
+        .fn()
+        .mockResolvedValue(response(status as number, { error: { code } })),
+      () => true,
+      rejected,
+    );
+    await expect(
+      api.request("post", "/api/v1/auth/logout-all"),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(rejected).toHaveBeenCalledTimes(clears ? 1 : 0);
+  },
+);
+
+test("late rejected response cannot clear a newer account identity", async () => {
+  const rejected = jest.fn();
+  let current = true;
+  const transport = jest.fn(async () => {
+    current = false;
+    return response(403, { error: { code: "ACCOUNT_DISABLED" } });
+  });
+  const api = createApiClient(
+    base,
+    async () => "token",
+    transport,
+    () => current,
+    rejected,
+  );
+  await expect(api.request("get", "/api/v1/auth/me")).rejects.toBeInstanceOf(
+    ApiError,
+  );
+  expect(rejected).not.toHaveBeenCalled();
+});
+
+test.each(["abort", "timeout"])(
+  "%s during a shared refresh must not clear the account",
+  async (mode) => {
+    let token = "old-access";
+    let finish!: (token: string) => void;
+    const refresh = new Promise<string>((resolve) => {
+      finish = (value) => {
+        token = value;
+        resolve(value);
+      };
+    });
+    const getToken = jest.fn(async (force?: boolean) =>
+      force ? refresh : token,
+    );
+    const rejected = jest.fn();
+    const transport = jest
+      .fn()
+      .mockResolvedValueOnce(response(401))
+      .mockResolvedValue(response(200, { id: "same-user" }));
+    const api = createApiClient(
+      base,
+      getToken,
+      transport,
+      () => true,
+      rejected,
+    );
+    const controller = new AbortController();
+    const request = api.request("get", "/api/v1/auth/me", {
+      signal: controller.signal,
+      timeoutMs: mode === "timeout" ? 50 : 1000,
+    });
+    const outcome = expect(request).rejects.toMatchObject({
+      code: mode === "timeout" ? "TOKEN_TIMEOUT" : "ABORTED",
+    });
+    for (let i = 0; i < 50 && getToken.mock.calls.length < 2; i++)
+      await Promise.resolve();
+    expect(getToken.mock.calls.length).toBe(2);
+    if (mode === "abort") controller.abort();
+    await outcome;
+    expect(rejected).not.toHaveBeenCalled();
+    finish("new-access");
+    await expect(api.request("get", "/api/v1/auth/me")).resolves.toMatchObject({
+      id: "same-user",
+    });
+    expect(rejected).not.toHaveBeenCalled();
+  },
+);
+
 test("typed request attaches bearer and preserves decimal strings", async () => {
   const transport = jest
     .fn()
@@ -26,8 +118,14 @@ test("typed request attaches bearer and preserves decimal strings", async () => 
 });
 
 test("an unrecorded activity day preserves the documented nullable success", async () => {
-  const api = createApiClient(base, async () => "token", async () => response(200, null));
-  await expect(api.request("get", "/api/v1/activity/daily")).resolves.toBeNull();
+  const api = createApiClient(
+    base,
+    async () => "token",
+    async () => response(200, null),
+  );
+  await expect(
+    api.request("get", "/api/v1/activity/daily"),
+  ).resolves.toBeNull();
 });
 
 test.each([401, 403, 404, 409, 422, 429, 500, 503])(
@@ -62,7 +160,7 @@ test("GET refreshes once on401; POST never automatically retries", async () => {
   const token = jest.fn().mockResolvedValue("private");
   const api = createApiClient(base, token, transport);
   expect((await api.request("get", "/api/v1/me")).id).toBe("user");
-  expect(token.mock.calls).toEqual([[undefined], [true]]);
+  expect(token.mock.calls).toEqual([[undefined], [true, "private"]]);
   transport.mockReset().mockResolvedValue(response(401));
   await expect(
     api.request("post", "/api/v1/goals", {
@@ -144,7 +242,7 @@ test("stale account clients cannot continue writes under a new account", async (
   expect(transport).not.toHaveBeenCalled();
 });
 
-test("timeout settles a stuck Clerk token request before any HTTP write", async () => {
+test("timeout settles a stuck session token request before any HTTP write", async () => {
   const transport = jest.fn();
   const api = createApiClient(base, () => new Promise(() => {}), transport);
   await expect(
@@ -251,7 +349,7 @@ test("network failure, token failure, and invalid JSON have separate safe diagno
     [
       jest.fn(),
       async () => {
-        throw new Error("private Clerk payload");
+        throw new Error("private authentication payload");
       },
       "TOKEN_UNAVAILABLE",
     ],

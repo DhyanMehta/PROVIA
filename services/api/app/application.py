@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.v1.router import router
-from app.core.auth import TokenVerifier
 from app.core.config import Settings, get_settings
 from app.core.cors import configure_cors
 from app.core.exceptions import (
@@ -17,6 +16,7 @@ from app.core.limits import RequestBodyLimitMiddleware
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.db.session import Database
 from app.integrations.foods import OpenFoodFactsProvider, USDAProvider
+from app.modules.auth.email import create_delivery
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -40,7 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = settings
     application.state.database = database
-    application.state.token_verifier = TokenVerifier(settings)
+    application.state.auth_delivery = create_delivery(settings)
     application.state.food_providers = {
         "usda": USDAProvider(settings),
         "open_food_facts": OpenFoodFactsProvider(settings),
@@ -52,5 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.add_middleware(SanitizedErrorMiddleware)
     configure_cors(application, settings)
-    application.add_middleware(RequestLoggingMiddleware)
+    application.add_middleware(
+        RequestLoggingMiddleware, auth_prefix=settings.api_v1_prefix + "/auth"
+    )
     return application

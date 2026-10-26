@@ -20,14 +20,17 @@ type Query<P extends keyof paths, M extends Method<P>> =
   Operation<P, M> extends { parameters: { query?: infer Q } } ? Q : never;
 type Success<O> = O extends { responses: infer R }
   ? {
-      [K in keyof R]: K extends 200 | 201
+      [K in keyof R]: K extends 200 | 201 | 202
         ? R[K] extends { content: { "application/json": infer T } }
           ? T
           : never
         : never;
     }[keyof R]
   : never;
-type Token = (refresh?: boolean) => Promise<string | null>;
+type Token = (
+  refresh?: boolean,
+  rejectedToken?: string,
+) => Promise<string | null>;
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
   return new Promise<T>((resolve, reject) => {
@@ -71,7 +74,7 @@ export function errorMessage(error: unknown): string {
     return "Something went wrong. Please try again.";
   const messages: Record<number, string> = {
     401: "Your session could not be verified. Sign in again.",
-    403: "Access was denied. Your Clerk account may have pending setup steps.",
+    403: "Access was denied. Verify your email or check your account status.",
     404: "This record is unavailable.",
     409: "Your saved data changed. Reload before confirming.",
     422: "Check the values entered. The server could not accept them.",
@@ -81,13 +84,13 @@ export function errorMessage(error: unknown): string {
     Record<ReturnType<typeof failureCategory>, string>
   > = {
     AUTH_UNAVAILABLE:
-      "The backend cannot verify sessions right now. Check its Clerk configuration or identity-provider availability.",
+      "The backend cannot verify sessions right now. Check its authentication configuration.",
     DATABASE_UNAVAILABLE:
       "The backend is reachable, but its database is unavailable.",
     TOKEN_TIMEOUT:
-      "Clerk did not supply a session token in time. Check your connection and try again.",
+      "Session renewal did not finish in time. Check your connection and sign in again.",
     TOKEN_UNAVAILABLE:
-      "Clerk could not supply a session token. Check your connection or sign in again.",
+      "A session token is unavailable. Check your connection or sign in again.",
     NETWORK_TIMEOUT:
       "The backend did not respond in time. A Render cold start is possible; try again shortly.",
     NETWORK_ERROR:
@@ -97,9 +100,23 @@ export function errorMessage(error: unknown): string {
     BACKEND_UNAVAILABLE:
       "The backend returned a server error. It may be starting; check its health and Render logs.",
   };
-  const text = error.uncertainWrite
-    ? "The save result is unknown. Reconnect and reconcile before trying again."
-    : (categories[error.category] ?? messages[error.status] ?? error.message);
+  const specific: Record<string, string> = {
+    INVALID_ACTION:
+      "This link is invalid, expired or already used. Request a new link.",
+    INVALID_AUTHENTICATION:
+      "Authentication could not be verified. Check your credentials or sign in again.",
+    ACCOUNT_DISABLED: "This account is disabled. Contact support for access.",
+    EMAIL_NOT_VERIFIED: "Verify your email before opening your fitness data.",
+  };
+  const text =
+    specific[error.code] ??
+    (error.code === "EMAIL_UNAVAILABLE"
+      ? "Email delivery is unavailable. Verification and password recovery are blocked until delivery is configured and working."
+      : error.uncertainWrite
+        ? "The save result is unknown. Reconnect and reconcile before trying again."
+        : (categories[error.category] ??
+          messages[error.status] ??
+          error.message));
   const context = error.diagnostic;
   return (
     text +
@@ -117,6 +134,7 @@ export function createApiClient(
   getToken: Token,
   transport: typeof fetch = fetch,
   isCurrentSession: () => boolean = () => true,
+  onAuthRejected: (error: ApiError) => void = () => {},
 ) {
   const pending = new Set<AbortController>();
   let active = true;
@@ -130,6 +148,7 @@ export function createApiClient(
       authenticated?: boolean;
       timeoutMs?: number;
       refresh?: boolean;
+      params?: Record<string, string>;
       validate?: (data: Success<Operation<P, M>>) => boolean;
     } = {},
   ): Promise<Success<Operation<P, M>>> {
@@ -139,6 +158,7 @@ export function createApiClient(
     let timedOut = false;
     let status = 0;
     let requestId: string | null = null;
+    let rejectedByServer = false;
     pending.add(controller);
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
@@ -190,17 +210,33 @@ export function createApiClient(
       while (true) {
         phase = "http";
         response = await abortable(
-          transport(baseUrl + path.replace(/^\/api\/v1/, "") + query, {
-            method: method.toUpperCase(),
-            signal: controller.signal,
-            redirect: "error",
-            headers: {
-              Accept: "application/json",
-              ...(options.body ? { "Content-Type": "application/json" } : {}),
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          transport(
+            baseUrl +
+              path
+                .replace(/^\/api\/v1/, "")
+                .replace(/\{([^}]+)\}/g, (_match, key) => {
+                  const value = options.params?.[key];
+                  if (!value)
+                    throw new ApiError(
+                      "Missing route parameter.",
+                      400,
+                      "INVALID_ROUTE",
+                    );
+                  return encodeURIComponent(value);
+                }) +
+              query,
+            {
+              method: method.toUpperCase(),
+              signal: controller.signal,
+              redirect: "error",
+              headers: {
+                Accept: "application/json",
+                ...(options.body ? { "Content-Type": "application/json" } : {}),
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              ...(options.body ? { body: JSON.stringify(options.body) } : {}),
             },
-            ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-          }),
+          ),
           controller.signal,
         );
         status = response.status;
@@ -213,7 +249,10 @@ export function createApiClient(
         ) {
           refresh = true;
           phase = "token";
-          token = await abortable(getToken(true), controller.signal);
+          token = await abortable(
+            getToken(true, token ?? undefined),
+            controller.signal,
+          );
           if (!active || !isCurrentSession())
             throw new ApiError(
               "The account session changed.",
@@ -234,12 +273,11 @@ export function createApiClient(
             return null;
           },
         );
-        throw new ApiError(
-          "Request failed.",
-          response.status,
-          safeServerCode(data?.error?.code, response.status),
-          requestId,
-        );
+        const code = safeServerCode(data?.error?.code, response.status);
+        rejectedByServer =
+          response.status === 401 ||
+          (response.status === 403 && code === "ACCOUNT_DISABLED");
+        throw new ApiError("Request failed.", response.status, code, requestId);
       }
       if (response.status === 204) return undefined as Success<Operation<P, M>>;
       try {
@@ -293,6 +331,13 @@ export function createApiClient(
         phase,
         durationMs: Date.now() - started,
       };
+      if (
+        active &&
+        isCurrentSession() &&
+        options.authenticated !== false &&
+        rejectedByServer
+      )
+        onAuthRejected(failure);
       throw failure;
     } finally {
       clearTimeout(timer);

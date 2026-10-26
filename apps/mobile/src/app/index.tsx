@@ -1,4 +1,4 @@
-import { useAuth, useClerk } from "@clerk/expo";
+import { useAuth } from "../providers/auth";
 import { Redirect } from "expo-router";
 import { useCallback, useState } from "react";
 import { Action, Busy, Copy, ErrorNote, Page, Title } from "../components/ui";
@@ -9,7 +9,7 @@ import { errorMessage } from "../lib/api-client";
 
 function ResolveAccount() {
   const api = useApi();
-  const { signOut } = useClerk();
+  const { signOut } = useAuth();
   const [step, setStep] = useState<SetupStep>("session");
   const load = useCallback(
     (signal: AbortSignal) => loadSetup(api, signal, setStep),
@@ -51,6 +51,12 @@ function ResolveAccount() {
   );
 }
 export default function Index() {
-  const { isSignedIn } = useAuth();
-  return isSignedIn ? <ResolveAccount /> : <Redirect href="/welcome" />;
+  const { isSignedIn, user } = useAuth();
+  return !isSignedIn ? (
+    <Redirect href="/welcome" />
+  ) : !user?.email_verified ? (
+    <Redirect href="/verify-email" />
+  ) : (
+    <ResolveAccount />
+  );
 }

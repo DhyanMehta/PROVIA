@@ -29,11 +29,20 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = None
     database_url: SecretStr | None = None
     direct_database_url: SecretStr | None = None
-    auth_issuer: str | None = None
-    auth_audience: str | None = None
-    auth_jwks_url: str | None = None
-    auth_authorized_parties: list[str] = ["http://localhost:5173"]
-    auth_require_authorized_party: bool = False
+    auth_jwt_secret: SecretStr | None = None
+    auth_token_issuer: str = "https://provia-mag7.onrender.com"
+    auth_token_audience: str = "provia-mobile"
+    auth_access_seconds: int = Field(default=900, ge=60, le=900)
+    auth_refresh_days: int = Field(default=30, ge=1, le=30)
+    auth_trusted_proxy_cidrs: list[str] = []
+    auth_email_provider: Literal["smtp", "resend"] = "smtp"
+    resend_api_key: SecretStr | None = None
+    resend_from: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=465, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str | None = None
     nutrition_min_daily_calories: Decimal = Field(default=Decimal("1500"), ge=1200, le=5000)
     usda_api_key: SecretStr | None = None
     food_http_timeout_seconds: float = Field(default=5, gt=0, le=30)
@@ -57,7 +66,7 @@ class Settings(BaseSettings):
             raise ValueError("API_V1_PREFIX must be an absolute path without a trailing slash")
         return value
 
-    @field_validator("cors_origins", "auth_authorized_parties")
+    @field_validator("cors_origins")
     @classmethod
     def validate_origins(cls, values: list[str]) -> list[str]:
         for value in values:
@@ -77,15 +86,6 @@ class Settings(BaseSettings):
             # Accessing port also validates malformed port numbers.
             _ = parsed.port
         return values
-
-    @property
-    def resolved_jwks_url(self) -> str | None:
-        if self.auth_jwks_url:
-            return self.auth_jwks_url
-        issuer = urlsplit(self.auth_issuer or "")
-        if issuer.scheme == "https" and (issuer.hostname or "").endswith(".clerk.accounts.dev"):
-            return self.auth_issuer.rstrip("/") + "/.well-known/jwks.json"
-        return None
 
 
 @lru_cache

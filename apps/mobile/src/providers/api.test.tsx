@@ -3,7 +3,7 @@ import { createRoot } from "test-renderer";
 import { ApiProvider, useApi } from "./api";
 
 const mockGetToken = async () => "fixture-token";
-const mockClerk = { user: { id: "user-a" } };
+const mockSession = { getGeneration: () => 0, getSnapshot: () => ({ user: { id: "user-a" } }) };
 const mockTransport = jest.fn(
   async () =>
     ({
@@ -13,9 +13,8 @@ const mockTransport = jest.fn(
       headers: new Headers(),
     }) as Response,
 );
-jest.mock("@clerk/expo", () => ({
-  useAuth: () => ({ userId: "user-a", getToken: mockGetToken }),
-  useClerk: () => mockClerk,
+jest.mock("./auth", () => ({
+  useAuth: () => ({ userId: "user-a", getToken: mockGetToken, session: mockSession }),
 }));
 jest.mock("expo/fetch", () => ({
   fetch: () => mockTransport(),
