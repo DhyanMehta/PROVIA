@@ -1,5 +1,6 @@
 """Application factory, usable without initializing a default configured app."""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,6 +18,7 @@ from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.db.session import Database
 from app.integrations.foods import OpenFoodFactsProvider, USDAProvider
 from app.modules.auth.email import create_delivery
+from app.modules.auth.runner import ManagedEmailWorker
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,8 +28,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        yield
-        database.dispose()
+        supervisor = None
+        try:
+            if settings.auth_email_worker_enabled:
+                from app.modules.auth.outbox import EmailWorker
+
+                supervisor = ManagedEmailWorker(
+                    EmailWorker(database, settings, application.state.auth_delivery),
+                    settings.auth_email_poll_seconds,
+                )
+                application.state.auth_email_supervisor = supervisor
+                supervisor.start()
+            yield
+        finally:
+            if supervisor is not None:
+                await asyncio.to_thread(supervisor.stop)
+            database.dispose()
 
     # DEBUG controls logging, never Starlette's client-visible traceback pages.
     application = FastAPI(

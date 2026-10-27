@@ -1,16 +1,14 @@
 """Transactional authentication. Security state is committed before intentional errors."""
 
 import hmac
-import logging
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
-from sqlalchemy import case, delete, func, select, text, update
+from sqlalchemy import case, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.exceptions import AppError
 from app.db.auth_models import AuthAccount, AuthAction, AuthRateLimit, AuthRefreshToken, AuthSession
-from app.db.models import User
+from app.modules.auth.outbox import available_encryption, enqueue_request
 from app.modules.auth.schemas import AccountOut, TokenOut
 from app.modules.auth.security import (
     HASHER,
@@ -21,8 +19,6 @@ from app.modules.auth.security import (
     hash_password,
     opaque_token,
 )
-
-logger = logging.getLogger("provia.auth")
 
 
 class AuthService:
@@ -84,68 +80,21 @@ class AuthService:
 
     def registration(self, data, client):
         self.tokens.secret()
-        self.delivery.available()
+        available_encryption(self.settings)
         email = str(data.email)
         self.limit("register", email, client, 5)
-        password_hash = hash_password(data.password)
-        # Serialize absent email keys too; UNIQUE remains the final invariant.
-        key = int(digest(email)[:16], 16)
-        if key >= 2**63:
-            key -= 2**64
-        self.db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
-        existing = self.db.scalar(select(AuthAccount).where(AuthAccount.email == email))
-        legacy = self.db.scalar(
-            select(User.id)
-            .where(
-                func.lower(User.email) == email,
-                ~select(AuthAccount.id).where(AuthAccount.user_id == User.id).exists(),
-            )
-            .limit(1)
+        # Hashing and encrypted intent insertion are identical for every address.
+        # Account lookup, enrollment and provider latency belong to the worker.
+        enqueue_request(
+            self.db,
+            self.settings,
+            "register",
+            {
+                "email": email,
+                "name": data.name,
+                "password_hash": hash_password(data.password),
+            },
         )
-        if existing or legacy:
-            return
-        try:
-            with self.db.begin_nested():
-                user_id = uuid4()
-                self.db.add(
-                    User(id=user_id, auth_provider_subject="provia:" + str(user_id), email=email)
-                )
-                self.db.flush()
-                account = AuthAccount(
-                    user_id=user_id, email=email, name=data.name, password_hash=password_hash
-                )
-                self.db.add(account)
-                self.db.flush()
-                self.action(account, "verify_email")
-        except AppError as error:
-            if error.code != "EMAIL_UNAVAILABLE":
-                raise
-            # Keep generic202 identical to an existing/unknown address. No account
-            # or action survives this savepoint; no success claims email was sent.
-            logger.warning("Email delivery unconfirmed; authentication issuance rolled back")
-
-    def action(self, account, purpose):
-        now = datetime.now(UTC)
-        self.db.execute(
-            update(AuthAction)
-            .where(
-                AuthAction.account_id == account.id,
-                AuthAction.purpose == purpose,
-                AuthAction.consumed_at.is_(None),
-            )
-            .values(consumed_at=now)
-        )
-        raw = opaque_token()
-        self.db.add(
-            AuthAction(
-                account_id=account.id,
-                token_hash=digest(raw),
-                purpose=purpose,
-                expires_at=now + timedelta(minutes=30 if purpose == "verify_email" else 15),
-            )
-        )
-        self.db.flush()
-        self.delivery.send(account.email, purpose, raw)
 
     def issue(self, account, family):
         raw = opaque_token()
@@ -244,23 +193,9 @@ class AuthService:
         )
 
     def request_action(self, email, purpose, client):
-        self.delivery.available()
+        available_encryption(self.settings)
         self.limit(purpose, str(email), client, 3)
-        candidate = self.db.scalar(select(AuthAccount).where(AuthAccount.email == str(email)))
-        if candidate:
-            account = self.account(candidate.id)
-            if account.status != "disabled" and (
-                purpose == "reset_password" or not account.email_verified_at
-            ):
-                try:
-                    with self.db.begin_nested():
-                        self.action(account, purpose)
-                except AppError as error:
-                    if error.code != "EMAIL_UNAVAILABLE":
-                        raise
-                    logger.warning(
-                        "Email delivery unconfirmed; authentication issuance rolled back"
-                    )
+        enqueue_request(self.db, self.settings, purpose, {"email": str(email)})
 
     def consume_action(self, raw, purpose, client, new_password=None):
         self.limit("consume:" + purpose, client, client, 20)

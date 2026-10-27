@@ -37,6 +37,11 @@ def sensitive(response: Response):
 
 @router.post("/register", response_model=MessageOut, status_code=202)
 def register(data: RegisterIn, request: Request, db: DbSession, response: Response):
+    """Accept an encrypted intent; account creation and email delivery occur later.
+
+    A generic 202 does not establish that the address is eligible, an account exists,
+    or an email has been sent. No public delivery-status lookup is provided.
+    """
     sensitive(response)
     service(request, db).registration(data, client_identity(request))
     return {
@@ -78,6 +83,7 @@ def logout_all(principal: Identity, request: Request, db: DbSession, response: R
 
 @router.post("/resend-verification", response_model=MessageOut, status_code=202)
 def resend(data: EmailIn, request: Request, db: DbSession, response: Response):
+    """Accept a durable request; eligibility and delivery are evaluated asynchronously."""
     sensitive(response)
     service(request, db).request_action(data.email, "verify_email", client_identity(request))
     return {"message": "If verification is needed, check your email for instructions"}
@@ -85,6 +91,7 @@ def resend(data: EmailIn, request: Request, db: DbSession, response: Response):
 
 @router.post("/forgot-password", response_model=MessageOut, status_code=202)
 def forgot(data: EmailIn, request: Request, db: DbSession, response: Response):
+    """Accept a durable request without confirming account existence or inbox delivery."""
     sensitive(response)
     service(request, db).request_action(data.email, "reset_password", client_identity(request))
     return {"message": "If the account is eligible, check your email for reset instructions"}

@@ -6101,6 +6101,7 @@
     },
     "/api/v1/auth/forgot-password": {
       "post": {
+        "description": "Accept a durable request without confirming account existence or inbox delivery.",
         "operationId": "forgot_api_v1_auth_forgot_password_post",
         "requestBody": {
           "content": {
@@ -6877,6 +6878,7 @@
     },
     "/api/v1/auth/register": {
       "post": {
+        "description": "Accept an encrypted intent; account creation and email delivery occur later.\n\nA generic 202 does not establish that the address is eligible, an account exists,\nor an email has been sent. No public delivery-status lookup is provided.",
         "operationId": "register_api_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -7008,6 +7010,7 @@
     },
     "/api/v1/auth/resend-verification": {
       "post": {
+        "description": "Accept a durable request; eligibility and delivery are evaluated asynchronously.",
         "operationId": "resend_api_v1_auth_resend_verification_post",
         "requestBody": {
           "content": {

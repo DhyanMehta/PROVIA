@@ -16,7 +16,7 @@ const settings = readFileSync(new URL('../services/api/app/core/config.py', impo
 for (const env of service.envVars) {
   assert.ok(env.key === 'PYTHON_VERSION' || new RegExp(`^    ${env.key.toLowerCase()}:`, 'm').test(settings), `Unknown setting: ${env.key}`);
   if (env.value !== undefined) assert.equal(typeof env.value, 'string');
-  if (/DATABASE_URL|API_KEY|AUTH_JWT_SECRET|SMTP_PASSWORD/.test(env.key)) assert.equal(env.sync, false);
+  if (/DATABASE_URL|API_KEY|AUTH_JWT_SECRET|SMTP_PASSWORD|ENCRYPTION_KEYS/.test(env.key)) assert.equal(env.sync, false);
 }
 assert.ok(service.envVars.some(env => env.key === 'AUTH_JWT_SECRET' && env.sync === false));
 assert.ok(!service.envVars.some(env => /JWKS|AUTHORIZED_PART|AUTH_ISSUER|AUTH_AUDIENCE/.test(env.key)));

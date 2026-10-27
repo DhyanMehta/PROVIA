@@ -23,7 +23,7 @@ def test_migration_roundtrip_and_no_drift(pg_engine):
     with pg_engine.begin() as connection:
         tables = inspect(connection).get_table_names()
         assert set(Base.metadata.tables) <= set(tables)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
         for name, table in Base.metadata.tables.items():
             assert len(inspect(connection).get_foreign_keys(name)) == len(table.foreign_keys)
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []

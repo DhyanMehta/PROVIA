@@ -115,7 +115,11 @@ test("an open verification screen consumes a newly received email link", async (
   expect(mockPublicRequest).toHaveBeenCalledWith(
     "post",
     "/api/v1/auth/verify-email",
-    { authenticated: false, body: { token: mockParams.token } },
+    {
+      authenticated: false,
+      body: { token: mockParams.token },
+      validate: expect.any(Function),
+    },
   );
   expect(require("expo-router").router.setParams).toHaveBeenCalledWith({
     token: undefined,

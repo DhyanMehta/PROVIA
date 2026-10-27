@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     auth_refresh_days: int = Field(default=30, ge=1, le=30)
     auth_trusted_proxy_cidrs: list[str] = []
     auth_email_provider: Literal["smtp", "resend"] = "smtp"
+    # Server-only ordered JSON key ring; first Fernet key encrypts new outbox jobs.
+    auth_email_encryption_keys: SecretStr | None = None
+    auth_email_requests_enabled: bool = True
+    auth_email_worker_enabled: bool = False
+    auth_email_poll_seconds: int = Field(default=2, ge=1, le=60)
     resend_api_key: SecretStr | None = None
     resend_from: str | None = None
     smtp_host: str | None = None

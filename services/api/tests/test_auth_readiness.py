@@ -1,3 +1,4 @@
+import base64
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -20,6 +21,10 @@ def configured():
         auth_email_provider="resend",
         resend_api_key="test-only-provider-key",
         resend_from="sender@example.com",
+        auth_email_encryption_keys=json.dumps(
+            [base64.urlsafe_b64encode(bytes(range(32))).decode()]
+        ),
+        auth_email_worker_enabled=True,
     )
 
 
@@ -33,7 +38,7 @@ def test_current_schema_does_not_mistake_db_connectivity_for_auth_readiness(monk
 
 def test_configured_schema_still_requires_external_acceptance(monkeypatch):
     db, _ = database()
-    monkeypatch.setattr(readiness, "database_state", lambda connection: ("0005", True))
+    monkeypatch.setattr(readiness, "database_state", lambda connection: ("0006", True))
     result = readiness.check(configured(), db)
     assert result["configuration_and_schema_ready"] is True
     assert result["real_email_delivery"] == "NOT VERIFIED"
@@ -52,13 +57,13 @@ def test_connection_failure_and_missing_configuration_are_sanitized(monkeypatch)
     assert "private-connection-details" not in json.dumps(result)
 
 
-def test_schema_probe_is_read_only_and_checks_all_five_tables(monkeypatch):
+def test_schema_probe_is_read_only_and_checks_all_auth_tables(monkeypatch):
     connection = MagicMock()
     inspector = MagicMock()
     inspector.get_table_names.return_value = ["alembic_version", *readiness.AUTH_TABLES]
     monkeypatch.setattr(readiness, "inspect", lambda _: inspector)
-    connection.scalar.return_value = "0005"
-    assert readiness.database_state(connection) == ("0005", True)
+    connection.scalar.return_value = "0006"
+    assert readiness.database_state(connection) == ("0006", True)
     assert str(connection.scalar.call_args.args[0]) == "SELECT version_num FROM alembic_version"
     inspector.get_table_names.return_value.remove("auth_actions")
-    assert readiness.database_state(connection) == ("0005", False)
+    assert readiness.database_state(connection) == ("0006", False)

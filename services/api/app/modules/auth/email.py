@@ -13,6 +13,12 @@ from app.core.exceptions import AppError
 SENDER = TypeAdapter(NameEmail)
 
 
+class DeliveryFailure(AppError):
+    def __init__(self, retryable=True):
+        super().__init__("EMAIL_UNAVAILABLE", "Email delivery is unavailable", 503)
+        self.retryable = retryable
+
+
 def check_sender(value: str | None):
     """Validate one configured mailbox without claiming domain/provider approval."""
     if not value or len(value) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in value):
@@ -26,7 +32,7 @@ def check_sender(value: str | None):
 class Delivery(Protocol):
     def available(self) -> None: ...
 
-    def send(self, email: str, purpose: str, token: str) -> None: ...
+    def send(self, email: str, purpose: str, token: str, *, idempotency_key=None) -> None: ...
 
 
 def content(purpose: str, token: str) -> tuple[str, str]:
@@ -59,18 +65,19 @@ class ResendDelivery:
             raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
         check_sender(self.settings.resend_from)
 
-    def send(self, email: str, purpose: str, token: str):
+    def send(self, email: str, purpose: str, token: str, *, idempotency_key=None):
         self.available()
         subject, body = content(purpose, token)
+        headers = {"Authorization": "Bearer " + self.settings.resend_api_key.get_secret_value()}
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
         try:
             with httpx.Client(
                 timeout=5, verify=True, follow_redirects=False, transport=self.transport
             ) as client:
                 response = client.post(
                     "https://api.resend.com/emails",
-                    headers={
-                        "Authorization": "Bearer " + self.settings.resend_api_key.get_secret_value()
-                    },
+                    headers=headers,
                     json={
                         "from": self.settings.resend_from,
                         "to": [email],
@@ -86,8 +93,11 @@ class ResendDelivery:
                     or not result["id"]
                 ):
                     raise ValueError
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            raise DeliveryFailure(status in {408, 409, 429} or status >= 500) from None
         except Exception:
-            raise AppError("EMAIL_UNAVAILABLE", "Email delivery is unavailable", 503) from None
+            raise DeliveryFailure() from None
 
 
 class SmtpDelivery:
@@ -106,7 +116,7 @@ class SmtpDelivery:
             raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
         check_sender(s.smtp_from)
 
-    def send(self, email: str, purpose: str, token: str):
+    def send(self, email: str, purpose: str, token: str, *, idempotency_key=None):
         self.available()
         s = self.settings
         try:
@@ -127,5 +137,7 @@ class SmtpDelivery:
                     client.starttls(context=context)
                     client.login(s.smtp_username, s.smtp_password.get_secret_value())
                     client.send_message(message)
+        except (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused):
+            raise DeliveryFailure(retryable=False) from None
         except Exception:
-            raise AppError("EMAIL_UNAVAILABLE", "Email delivery is unavailable", 503) from None
+            raise DeliveryFailure() from None

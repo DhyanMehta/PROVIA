@@ -12,6 +12,15 @@ import {
 import { useAuth } from "../providers/auth";
 import { errorMessage } from "../lib/api-client";
 
+function messageResponse(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "message" in value &&
+    typeof value.message === "string"
+  );
+}
+
 function useWork() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -162,6 +171,10 @@ export function Register() {
         Use 15–128 characters for your password. Spaces and Unicode are
         preserved exactly.
       </Copy>
+      <Copy>
+        Account setup and email delivery may take a few minutes. An accepted
+        request does not confirm that your account is ready or an email arrived.
+      </Copy>
       <Field
         label="Name"
         value={name}
@@ -193,7 +206,7 @@ export function Register() {
       />
       {work.error && <ErrorNote message={work.error} />}
       <Action
-        label={work.busy ? "Creating account…" : "Create account"}
+        label={work.busy ? "Submitting request…" : "Create account"}
         disabled={work.busy}
         onPress={() => {
           if (password.length < 15 || password !== confirm || !name.trim()) {
@@ -207,6 +220,7 @@ export function Register() {
               authenticated: false,
               timeoutMs: 90000,
               body: { name: name.trim(), email: email.trim(), password },
+              validate: messageResponse,
             });
             router.replace("/verify-email");
           });
@@ -264,9 +278,9 @@ function VerificationForm({ token }: { token: string }) {
         stays protected until verification.
       </Copy>
       <Copy>
-        Email delivery must be configured. This screen never marks your email
-        verified without a valid server confirmation. If no message arrives,
-        delivery may be unavailable or account enrollment may require support.
+        Delivery can be delayed. An accepted request does not confirm that an
+        account was created or an email was delivered. Check spam, then request
+        a new link if needed. Account enrollment may require support.
       </Copy>
       {token && (
         <Action
@@ -277,7 +291,11 @@ function VerificationForm({ token }: { token: string }) {
               await session.publicApi.request(
                 "post",
                 "/api/v1/auth/verify-email",
-                { authenticated: false, body: { token } },
+                {
+                  authenticated: false,
+                  body: { token },
+                  validate: messageResponse,
+                },
               );
               if (user) {
                 await session.reloadUser();
@@ -308,12 +326,18 @@ function VerificationForm({ token }: { token: string }) {
         disabled={work.busy || cooldown > 0 || !email}
         onPress={() =>
           void work.run(async () => {
-            const result = await session.publicApi.request(
+            await session.publicApi.request(
               "post",
               "/api/v1/auth/resend-verification",
-              { authenticated: false, body: { email: email.trim() } },
+              {
+                authenticated: false,
+                body: { email: email.trim() },
+                validate: messageResponse,
+              },
             );
-            setMessage(result.message);
+            setMessage(
+              "Request received. If verification is available for this email, instructions may arrive shortly. Delivery is not confirmed.",
+            );
             setCooldown(60);
           })
         }
@@ -355,8 +379,14 @@ function VerificationForm({ token }: { token: string }) {
 export function ForgotPassword() {
   const { session } = useAuth();
   const [email, setEmail] = useState(""),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [cooldown, setCooldown] = useState(0);
   const work = useWork();
+  useEffect(() => {
+    if (!cooldown) return;
+    const timer = setTimeout(() => setCooldown((value) => value - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
   return (
     <Page>
       <Title eyebrow="Account recovery">Find your way back.</Title>
@@ -367,7 +397,10 @@ export function ForgotPassword() {
       <Field
         label="Email"
         value={email}
-        onChangeText={setEmail}
+        onChangeText={(value) => {
+          setEmail(value);
+          setMessage("");
+        }}
         keyboardType="email-address"
         autoCapitalize="none"
         autoCorrect={false}
@@ -376,16 +409,29 @@ export function ForgotPassword() {
       {message && <Copy>{message}</Copy>}
       {work.error && <ErrorNote message={work.error} />}
       <Action
-        label={work.busy ? "Requesting…" : "Request reset instructions"}
-        disabled={work.busy || !email || !!message}
+        label={
+          work.busy
+            ? "Requesting…"
+            : cooldown
+              ? `Request available in ${cooldown}s`
+              : "Request reset instructions"
+        }
+        disabled={work.busy || !email || cooldown > 0}
         onPress={() =>
           void work.run(async () => {
-            const result = await session.publicApi.request(
+            await session.publicApi.request(
               "post",
               "/api/v1/auth/forgot-password",
-              { authenticated: false, body: { email: email.trim() } },
+              {
+                authenticated: false,
+                body: { email: email.trim() },
+                validate: messageResponse,
+              },
             );
-            setMessage(result.message);
+            setMessage(
+              "Request received. If password recovery is available for this email, instructions may arrive shortly. Delivery is not confirmed.",
+            );
+            setCooldown(60);
           })
         }
       />
@@ -414,8 +460,8 @@ function ResetForm({ token }: { token: string }) {
       <Title eyebrow="A fresh start">Reset your password.</Title>
       {!token ? (
         <Copy>
-          Open a valid reset link from your email. Links expire after 15 minutes
-          and work once.
+          Open a valid reset link from your email. Links are short-lived and work
+          once; delivery delays reduce the remaining time.
         </Copy>
       ) : !done ? (
         <>
@@ -449,6 +495,7 @@ function ResetForm({ token }: { token: string }) {
                   {
                     authenticated: false,
                     body: { token, new_password: password },
+                    validate: messageResponse,
                   },
                 );
                 await session.clear();

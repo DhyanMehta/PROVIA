@@ -65,7 +65,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Forgot */
+        /**
+         * Forgot
+         * @description Accept a durable request without confirming account existence or inbox delivery.
+         */
         post: operations["forgot_api_v1_auth_forgot_password_post"];
         delete?: never;
         options?: never;
@@ -167,7 +170,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Register */
+        /**
+         * Register
+         * @description Accept an encrypted intent; account creation and email delivery occur later.
+         *
+         *     A generic 202 does not establish that the address is eligible, an account exists,
+         *     or an email has been sent. No public delivery-status lookup is provided.
+         */
         post: operations["register_api_v1_auth_register_post"];
         delete?: never;
         options?: never;
@@ -184,7 +193,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resend */
+        /**
+         * Resend
+         * @description Accept a durable request; eligibility and delivery are evaluated asynchronously.
+         */
         post: operations["resend_api_v1_auth_resend_verification_post"];
         delete?: never;
         options?: never;

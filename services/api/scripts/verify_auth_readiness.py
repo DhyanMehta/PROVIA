@@ -7,6 +7,7 @@ from sqlalchemy import inspect, text
 from app.core.config import Settings
 from app.db.session import Database
 from app.modules.auth.email import create_delivery
+from app.modules.auth.outbox import available_encryption
 from app.modules.auth.security import AccessTokens
 
 AUTH_TABLES = {
@@ -15,6 +16,7 @@ AUTH_TABLES = {
     "auth_refresh_tokens",
     "auth_actions",
     "auth_rate_limits",
+    "auth_email_jobs",
 }
 
 
@@ -33,20 +35,29 @@ def check(settings, database=None):
     for name, probe in (
         ("signer_configuration", lambda: AccessTokens(settings).secret()),
         ("email_configuration", lambda: create_delivery(settings).available()),
+        ("outbox_encryption", lambda: available_encryption(settings)),
     ):
         try:
             probe()
             report[name] = {"status": "PASS"}
         except Exception:
             report[name] = {"status": "BLOCKED", "reason": "Configuration missing or invalid"}
+    report["worker_configuration"] = {
+        "status": "PASS" if settings.auth_email_worker_enabled else "BLOCKED",
+        "reason": "Enabled" if settings.auth_email_worker_enabled else "Worker disabled",
+    }
+    report["request_configuration"] = {
+        "status": "PASS" if settings.auth_email_requests_enabled else "BLOCKED",
+        "reason": "Enabled" if settings.auth_email_requests_enabled else "New intents paused",
+    }
     db = database if database is not None else Database(settings)
     try:
         with db.engine.connect() as connection:
             revision, present = database_state(connection)
         report["database_schema"] = {
-            "status": "PASS" if revision == "0005" and present else "BLOCKED",
-            "expected_revision": "0005",
-            "revision_matches": revision == "0005",
+            "status": "PASS" if revision == "0006" and present else "BLOCKED",
+            "expected_revision": "0006",
+            "revision_matches": revision == "0006",
             "auth_tables_present": present,
         }
     except Exception:
@@ -60,6 +71,7 @@ def check(settings, database=None):
     report["real_email_delivery"] = "NOT VERIFIED"
     report["legacy_enrollment"] = "OPERATOR WORKFLOW REQUIRED"
     report["deployed_and_device_acceptance"] = "NOT VERIFIED"
+    report["free_host_delivery_availability"] = "NOT GUARANTEED DURING SLEEP OR SUSPENSION"
     # A green config/schema check is deliberately not production acceptance.
     return report
 

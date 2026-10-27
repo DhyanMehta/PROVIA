@@ -8,8 +8,11 @@ const workspace = fileURLToPath(new URL('..', import.meta.url));
 const values = parseEnv(readFileSync(join(workspace, 'services/api/.env'), 'utf8'));
 const secrets = new Set();
 for (const [name, value] of Object.entries(values)) {
-  if (value.length < 12 || !/API_KEY|SECRET|ACCESS_KEY_ID|DATABASE_URL|PASSWORD/.test(name)) continue;
+  if (value.length < 12 || !/API_KEY|SECRET|ACCESS_KEY_ID|DATABASE_URL|PASSWORD|ENCRYPTION_KEYS/.test(name)) continue;
   secrets.add(value);
+  if (name.includes('ENCRYPTION_KEYS')) {
+    try { const keys = JSON.parse(value); if (Array.isArray(keys)) for (const key of keys) if (typeof key === 'string' && key.length >= 12) secrets.add(key); } catch { /* Never include key contents in errors. */ }
+  }
   if (name.includes('DATABASE_URL')) {
     try { const password = new URL(value).password; if (password) { secrets.add(password); secrets.add(decodeURIComponent(password)); } } catch { /* No config values in errors. */ }
   }

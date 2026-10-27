@@ -37,6 +37,14 @@ services:
         value: '[]'
       - key: AUTH_EMAIL_PROVIDER
         value: resend
+      - key: AUTH_EMAIL_ENCRYPTION_KEYS
+        sync: false
+      - key: AUTH_EMAIL_REQUESTS_ENABLED
+        value: 'false'
+      - key: AUTH_EMAIL_WORKER_ENABLED
+        value: 'false'
+      - key: AUTH_EMAIL_POLL_SECONDS
+        value: '2'
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM

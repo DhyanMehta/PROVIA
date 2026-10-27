@@ -185,3 +185,44 @@ def test_smtp_ssl_uses_verified_context(monkeypatch):
     context = factory.call_args.kwargs["context"]
     assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
     connection.__enter__.return_value.send_message.assert_called_once()
+
+
+def test_provider_idempotency_key_and_body_stay_identical_on_explicit_worker_retry():
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"id": "provider-id"})
+
+    delivery = ResendDelivery(settings(), httpx.MockTransport(handle))
+    for _ in range(2):
+        delivery.send(
+            "recipient@example.com",
+            "verify_email",
+            "test-only-action",
+            idempotency_key="provia-auth/test-job",
+        )
+    assert requests[0].content == requests[1].content
+    assert (
+        requests[0].headers["idempotency-key"]
+        == requests[1].headers["idempotency-key"]
+        == "provia-auth/test-job"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,retryable", [(400, False), (401, False), (403, False), (429, True), (503, True)]
+)
+def test_provider_failure_retry_classification_is_bounded_and_sanitized(status, retryable):
+    from app.modules.auth.email import DeliveryFailure
+
+    delivery = ResendDelivery(
+        settings(),
+        httpx.MockTransport(
+            lambda request: httpx.Response(status, json={"private": "must-not-log"})
+        ),
+    )
+    with pytest.raises(DeliveryFailure) as error:
+        delivery.send("recipient@example.com", "verify_email", "test-only-action")
+    assert error.value.retryable is retryable
+    assert "must-not-log" not in str(error.value)
