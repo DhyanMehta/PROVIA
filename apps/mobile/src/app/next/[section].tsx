@@ -1,22 +1,18 @@
-import { useLocalSearchParams } from "expo-router";
-import { Card, Copy, Page, Title } from "../../components/ui";
+import { Redirect, useLocalSearchParams } from "expo-router";
+
+const destinations = {
+  Nutrition: "/nutrition",
+  Workouts: "/workouts",
+  Tracking: "/tracking",
+  Progress: "/progress",
+} as const;
+
 export default function NextSection() {
-  const { section } = useLocalSearchParams<{ section: string }>();
-  const title = ["Nutrition", "Workouts", "Tracking", "Progress"].includes(
-    section,
-  )
-    ? section
-    : "More tools";
-  return (
-    <Page>
-      <Title eyebrow="Next sprint phase">{title}</Title>
-      <Card>
-        <Copy>
-          This screen is not implemented yet. Your dashboard shows real saved
-          backend data; editing and detailed history for this area are planned
-          for the next execution.
-        </Copy>
-      </Card>
-    </Page>
-  );
+  const { section } = useLocalSearchParams<{ section?: string | string[] }>();
+  const target =
+    typeof section === "string" &&
+    Object.prototype.hasOwnProperty.call(destinations, section)
+      ? destinations[section as keyof typeof destinations]
+      : "/";
+  return <Redirect href={target} />;
 }

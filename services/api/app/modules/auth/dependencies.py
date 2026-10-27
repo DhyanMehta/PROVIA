@@ -73,7 +73,12 @@ def client_identity(request: Request) -> str:
         ]
         if not any(ip_address(peer) in network for network in trusted):
             return peer
-        chain = request.headers.get("x-forwarded-for", "").split(",")
+        forwarded = request.headers.getlist("x-forwarded-for")
+        # A proxy may append a second field without replacing an attacker-controlled
+        # first field. Reject that ambiguity rather than choosing either identity.
+        if len(forwarded) != 1:
+            return peer
+        chain = forwarded[0].split(",")
         if not 1 <= len(chain) <= 5:
             return peer
         for item in reversed(chain):

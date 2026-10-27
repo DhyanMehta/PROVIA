@@ -4,12 +4,14 @@ import Onboarding from "./onboarding";
 import { createApiClient } from "../lib/api-client";
 import Index from "../app/index";
 import { Welcome, Login, Register, VerifyEmail, ResetPassword } from "./auth";
-import { Nutrition, Workouts, Tracking, Progress } from "./fitness";
+import { Nutrition, Workouts, Tracking, Progress, FoodSearch } from "./fitness";
+import Profile from "./profile";
+import NextSection from "../app/next/[section]";
 
 const mockSignOut = jest.fn();
 const mockSignIn = jest.fn();
 const mockPublicRequest = jest.fn();
-let mockParams: { token?: string } = {};
+let mockParams: { token?: string; section?: string | string[] } = {};
 const mockAuth = {
   logoutPending: false,
   isSignedIn: true,
@@ -253,6 +255,7 @@ test("dashboard renders server values and missing-data states without invented m
       activity: null,
       workouts: { total_workouts: 0 },
       sleep: { duration_seconds: null },
+      weight: null,
     }),
   );
   await render(<Dashboard />);
@@ -356,6 +359,146 @@ test("a lost workout-start response is never automatically replayed", async () =
   expect(
     transport.mock.calls.filter(([, options]) => options.method === "POST"),
   ).toHaveLength(1);
+});
+
+test.each([
+  {},
+  { id: "unexpected", started_at: "not-a-date", status: "in_progress" },
+  { id: "unexpected", started_at: "2026-10-27T10:00:00Z", status: "completed" },
+])(
+  "malformed workout-start success %j remains uncertain and cannot claim completion",
+  async (body) => {
+    transport.mockImplementation(async (url: string, options: RequestInit) =>
+      reply(
+        options.method === "POST"
+          ? body
+          : url.includes("/dashboard/today")
+            ? emptyDay()
+            : { items: [] },
+        options.method === "POST" ? 201 : 200,
+      ),
+    );
+    await render(<Workouts />);
+    await fireEvent.press(await screen.findByText("Start workout"));
+    expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
+    expect(screen.queryByText(/It is saved as in progress/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Start workout" }).props
+        .accessibilityState.disabled,
+    ).toBe(true);
+    expect(
+      transport.mock.calls.filter(([, options]) => options.method === "POST"),
+    ).toHaveLength(1);
+  },
+);
+
+test("workout history navigates older and newer pages without creating sessions", async () => {
+  transport.mockImplementation(async (url: string) => {
+    if (url.includes("/dashboard/today")) return reply(emptyDay());
+    if (!url.includes("/workout-sessions")) return reply({ items: [] });
+    const offset = new URL(url).searchParams.get("offset");
+    return reply({
+      items:
+        offset === "0"
+          ? Array.from({ length: 5 }, (_, index) => ({
+              id: `session-${index}`,
+              started_at: "2026-10-26T10:00:00Z",
+              status: "in_progress",
+            }))
+          : [
+              {
+                id: "older",
+                started_at: "2026-10-25T10:00:00Z",
+                status: "cancelled",
+              },
+            ],
+    });
+  });
+  await render(<Workouts />);
+  await screen.findByText("Most recent sessions");
+  await fireEvent.press(screen.getByText("Older sessions"));
+  expect(await screen.findByText("Older sessions · offset 5")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Older sessions" }).props
+      .accessibilityState.disabled,
+  ).toBe(true);
+  await fireEvent.press(screen.getByText("Newer sessions"));
+  expect(await screen.findByText("Most recent sessions")).toBeTruthy();
+  expect(transport.mock.calls.some(([url]) => url.includes("offset=5"))).toBe(
+    true,
+  );
+  expect(
+    transport.mock.calls.every(([, options]) => options.method === "GET"),
+  ).toBe(true);
+});
+
+test.each([
+  ["dashboard", Dashboard],
+  ["nutrition", Nutrition],
+  ["tracking", Tracking],
+  ["progress", Progress],
+] as const)(
+  "malformed %s summaries show an API error instead of crashing",
+  async (_name, Component) => {
+    transport.mockResolvedValue(reply({}));
+    await render(<Component />);
+    expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
+  },
+);
+
+test.each([
+  ["Nutrition", "/nutrition"],
+  ["Workouts", "/workouts"],
+  ["Tracking", "/tracking"],
+  ["Progress", "/progress"],
+  ["unknown", "/"],
+  ["constructor", "/"],
+  [["Workouts", "Progress"], "/"],
+] as const)(
+  "legacy feature route %j resolves to a real tab or safe root",
+  async (section, target) => {
+    mockParams = {
+      section: typeof section === "string" ? section : [...section],
+    };
+    await render(<NextSection />);
+    expect(await screen.findByText(`Redirect:${target}`)).toBeTruthy();
+  },
+);
+
+test("malformed workout lists show an API error instead of dereferencing absent items", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(url.includes("/dashboard/today") ? emptyDay() : { items: null }),
+  );
+  await render(<Workouts />);
+  expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
+  expect(screen.queryByText("Start workout")).toBeNull();
+});
+
+test("malformed progress and catalog responses show safe errors", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(url.includes("/dashboard/today") ? emptyDay() : {}),
+  );
+  const view = await render(<Progress />);
+  expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
+  await view.unmount();
+  await render(<FoodSearch />);
+  await fireEvent.changeText(screen.getByLabelText("Search foods"), "oats");
+  await fireEvent.press(screen.getByText("Search"));
+  expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
+});
+
+test("malformed profile summaries cannot render objects as personal information", async () => {
+  transport.mockImplementation(async (url: string) =>
+    reply(
+      url.endsWith("/me")
+        ? { id: "user" }
+        : url.endsWith("/profile")
+          ? { display_name: { unexpected: true } }
+          : { items: [] },
+    ),
+  );
+  await render(<Profile />);
+  expect(await screen.findByText(/INVALID_RESPONSE/)).toBeTruthy();
 });
 
 test("tracking keeps unrecorded measurements distinct from logged zero steps", async () => {

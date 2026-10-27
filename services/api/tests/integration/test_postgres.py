@@ -11,8 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from alembic import command
+from app.db.auth_models import AuthAccount, AuthAction, AuthRefreshToken, AuthSession
 from app.db.base import Base
 from app.db.models import FitnessGoal, Food, GoalTransition, MealLog, Recipe, User, WeightLog
+from app.modules.auth.security import digest, hash_password
 
 pytestmark = pytest.mark.integration
 
@@ -58,11 +60,131 @@ def test_auth_upgrade_preserves_legacy_identity_and_fitness_records(pg_engine):
         assert db.get(User, user_id).auth_provider_subject == "legacy-preserved"
         record = db.get(WeightLog, weight_id)
         assert record.user_id == user_id and record.weight_kg == Decimal("97")
+        assert db.scalar(select(func.count()).select_from(AuthAccount)) == 0
     with pg_engine.begin() as connection:
         config.attributes["connection"] = connection
         command.downgrade(config, "0004")
     with Session(pg_engine) as db:
         assert db.get(User, user_id) is not None and db.get(WeightLog, weight_id) is not None
+    with pg_engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+    with Session(pg_engine) as db:
+        assert db.get(User, user_id).auth_provider_subject == "legacy-preserved"
+        assert db.get(WeightLog, weight_id).weight_kg == Decimal("97")
+        assert db.scalar(select(func.count()).select_from(AuthAccount)) == 0
+
+
+def test_auth_schema_uniqueness_foreign_keys_and_deletion_boundaries(pg_engine):
+    now = datetime.now(UTC)
+    password_hash = hash_password("A long integration-test password")
+    with Session(pg_engine) as db, db.begin():
+        user, other = User(auth_provider_subject="auth-owner"), User(auth_provider_subject="other")
+        db.add_all([user, other])
+        db.flush()
+        account = AuthAccount(
+            user_id=user.id, email="owner@example.com", name="Owner", password_hash=password_hash
+        )
+        weight = WeightLog(user_id=user.id, weight_kg=Decimal("97"), recorded_at=now)
+        db.add_all([account, weight])
+        db.flush()
+        family = AuthSession(
+            account_id=account.id, expires_at=now + timedelta(days=30), last_used_at=now
+        )
+        db.add(family)
+        db.flush()
+        db.add_all(
+            [
+                AuthRefreshToken(
+                    session_id=family.id,
+                    token_hash=digest("test-only-refresh"),
+                    expires_at=family.expires_at,
+                ),
+                AuthAction(
+                    account_id=account.id,
+                    token_hash=digest("test-only-action"),
+                    purpose="verify_email",
+                    expires_at=now + timedelta(minutes=30),
+                ),
+            ]
+        )
+        db.flush()
+        account_id, family_id, user_id, other_id, weight_id = (
+            account.id,
+            family.id,
+            user.id,
+            other.id,
+            weight.id,
+        )
+
+        invalid_rows = [
+            AuthAccount(
+                user_id=other_id,
+                email="owner@example.com",
+                name="Duplicate",
+                password_hash=password_hash,
+            ),
+            AuthAccount(
+                user_id=user_id,
+                email="another@example.com",
+                name="Duplicate link",
+                password_hash=password_hash,
+            ),
+            AuthAccount(
+                user_id=uuid4(),
+                email="orphan@example.com",
+                name="Orphan",
+                password_hash=password_hash,
+            ),
+            AuthSession(account_id=uuid4(), expires_at=now + timedelta(days=1), last_used_at=now),
+            AuthRefreshToken(
+                session_id=uuid4(),
+                token_hash=digest("orphan-refresh"),
+                expires_at=now + timedelta(days=1),
+            ),
+            AuthRefreshToken(
+                session_id=family_id,
+                token_hash=digest("test-only-refresh"),
+                expires_at=now + timedelta(days=1),
+            ),
+            AuthAction(
+                account_id=uuid4(),
+                token_hash=digest("orphan-action"),
+                purpose="verify_email",
+                expires_at=now + timedelta(minutes=1),
+            ),
+            AuthAction(
+                account_id=account_id,
+                token_hash=digest("test-only-action"),
+                purpose="reset_password",
+                expires_at=now + timedelta(minutes=1),
+            ),
+            AuthAction(
+                account_id=account_id,
+                token_hash=digest("invalid-purpose"),
+                purpose="unsupported",
+                expires_at=now + timedelta(minutes=1),
+            ),
+        ]
+        for row in invalid_rows:
+            with pytest.raises(IntegrityError), db.begin_nested():
+                db.add(row)
+                db.flush()
+        with pytest.raises(IntegrityError), db.begin_nested():
+            db.delete(user)
+            db.flush()
+
+    # Auth-account deletion is not exposed publicly; if an operator performs it,
+    # only authentication children cascade. Fitness and stable identity remain.
+    with Session(pg_engine) as db, db.begin():
+        assert db.get(WeightLog, weight_id).user_id == user_id
+        db.delete(db.get(AuthAccount, account_id))
+    with Session(pg_engine) as db:
+        assert db.get(User, user_id) is not None
+        assert db.get(WeightLog, weight_id).weight_kg == Decimal("97")
+        for model in (AuthAccount, AuthSession, AuthRefreshToken, AuthAction):
+            assert db.scalar(select(func.count()).select_from(model)) == 0
 
 
 def test_profile_goal_weight_crud_and_isolation(authenticated_client):

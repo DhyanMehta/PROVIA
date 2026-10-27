@@ -93,3 +93,37 @@ def test_random_opaque_tokens_and_purpose_keyed_buckets():
     assert len(a) >= 43 and a != b and digest(a) != a
     verifier = tokens()
     assert verifier.bucket("login", "identity") != verifier.bucket("reset", "identity")
+
+
+@pytest.mark.parametrize(
+    ("peer", "forwarded", "expected"),
+    [
+        ("198.51.100.9", ["203.0.113.1"], "198.51.100.9"),
+        ("10.0.0.2", ["203.0.113.1, 198.51.100.9, 10.0.0.3"], "198.51.100.9"),
+        ("10.0.0.2", ["203.0.113.1", "198.51.100.9"], "10.0.0.2"),
+        ("10.0.0.2", ["203.0.113.2", "198.51.100.9"], "10.0.0.2"),
+        ("10.0.0.2", ["invalid"], "10.0.0.2"),
+        ("10.0.0.2", ["203.0.113.1, invalid"], "10.0.0.2"),
+        ("10.0.0.2", [", ".join(["198.51.100.9"] * 6)], "10.0.0.2"),
+    ],
+)
+def test_proxy_identity_uses_only_unambiguous_trusted_forwarding(peer, forwarded, expected):
+    from types import SimpleNamespace
+
+    from starlette.requests import Request
+
+    from app.modules.auth.dependencies import client_identity
+
+    request = Request(
+        {
+            "type": "http",
+            "client": (peer, 443),
+            "headers": [(b"x-forwarded-for", value.encode("ascii")) for value in forwarded],
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=Settings(_env_file=None, auth_trusted_proxy_cidrs=["10.0.0.0/8"])
+                )
+            ),
+        }
+    )
+    assert client_identity(request) == expected

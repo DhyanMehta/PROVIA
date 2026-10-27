@@ -14,15 +14,21 @@ import {
 } from "../components/ui";
 import { useResource } from "../hooks/use-resource";
 import { loadSetup } from "../lib/onboarding";
-import { errorMessage } from "../lib/api-client";
+import { ApiError, errorMessage } from "../lib/api-client";
 import { metric } from "../lib/format";
 import { useApi } from "../providers/api";
+import { profileSummary } from "../lib/fitness-contracts";
 
 export default function Profile() {
   const api = useApi();
   const { signOut } = useAuth();
   const load = useCallback(
-    (signal: AbortSignal) => loadSetup(api, signal),
+    async (signal: AbortSignal) => {
+      const data = await loadSetup(api, signal);
+      if (!profileSummary(data))
+        throw new ApiError("Invalid profile summary.", 200, "INVALID_RESPONSE");
+      return data;
+    },
     [api],
   );
   const { data, error, reload } = useResource(load);
@@ -57,6 +63,9 @@ export default function Profile() {
       {!!error && (
         <>
           <ErrorNote message={errorMessage(error)} />
+          {data && (
+            <Copy>Showing previously fetched profile and goal values.</Copy>
+          )}
           <Action label="Retry" onPress={reload} />
         </>
       )}

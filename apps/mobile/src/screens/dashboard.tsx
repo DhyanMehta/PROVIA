@@ -15,13 +15,17 @@ import { useApi } from "../providers/api";
 import { useAuth } from "../providers/auth";
 import { errorMessage } from "../lib/api-client";
 import { metric } from "../lib/format";
+import { dashboardData } from "../lib/fitness-contracts";
 
 export default function Dashboard() {
   const api = useApi();
   const { user } = useAuth();
   const load = useCallback(
     (signal: AbortSignal) =>
-      api.request("get", "/api/v1/dashboard/today", { signal }),
+      api.request("get", "/api/v1/dashboard/today", {
+        signal,
+        validate: dashboardData,
+      }),
     [api],
   );
   const { data, error, loading, reload } = useResource(load);

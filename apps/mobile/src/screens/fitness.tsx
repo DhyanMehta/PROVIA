@@ -16,6 +16,15 @@ import { useApi } from "../providers/api";
 import { useResource } from "../hooks/use-resource";
 import { ApiError, errorMessage } from "../lib/api-client";
 import { metric } from "../lib/format";
+import {
+  dashboardData,
+  exercisePage,
+  foodSearchData,
+  planPage,
+  progressData,
+  sessionPage,
+  startedWorkout,
+} from "../lib/fitness-contracts";
 
 function Result({
   error,
@@ -30,7 +39,12 @@ function Result({
   return (
     <>
       {loading && <Busy />}
-      {!!error && <ErrorNote message={errorMessage(error)} />}
+      {!!error && (
+        <>
+          <ErrorNote message={errorMessage(error)} />
+          <Copy>Any summaries still shown are previously fetched data.</Copy>
+        </>
+      )}
       {children}
       <Action
         secondary
@@ -46,7 +60,10 @@ export function Nutrition() {
   const api = useApi();
   const load = useCallback(
     (signal: AbortSignal) =>
-      api.request("get", "/api/v1/dashboard/today", { signal }),
+      api.request("get", "/api/v1/dashboard/today", {
+        signal,
+        validate: dashboardData,
+      }),
     [api],
   );
   const resource = useResource(load),
@@ -121,6 +138,7 @@ export function Workouts() {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
   const [uncertain, setUncertain] = useState(false);
+  const [historyOffset, setHistoryOffset] = useState(0);
   const startLock = useRef(false);
   const load = useCallback(
     async (signal: AbortSignal) => {
@@ -128,23 +146,33 @@ export function Workouts() {
         api.request("get", "/api/v1/workout-plans", {
           signal,
           query: { limit: 5, offset: 0 },
+          validate: planPage,
         }),
         api.request("get", "/api/v1/exercises", {
           signal,
           query: { limit: 10, offset: 0 },
+          validate: exercisePage,
         }),
         api.request("get", "/api/v1/workout-sessions", {
           signal,
-          query: { limit: 5, offset: 0 },
+          query: { limit: 5, offset: historyOffset },
+          validate: sessionPage,
         }),
-        api.request("get", "/api/v1/dashboard/today", { signal }),
+        api.request("get", "/api/v1/dashboard/today", {
+          signal,
+          validate: dashboardData,
+        }),
       ]);
-      return { plans, exercises, history, today };
+      return { plans, exercises, history, today, historyOffset };
     },
-    [api],
+    [api, historyOffset],
   );
   const resource = useResource(load),
     data = resource.data;
+  function showHistory(offset: number) {
+    if (offset === historyOffset) resource.reload();
+    else setHistoryOffset(offset);
+  }
   async function startWorkout() {
     if (startLock.current || started || uncertain) return;
     startLock.current = true;
@@ -153,9 +181,10 @@ export function Workouts() {
     try {
       const row = await api.request("post", "/api/v1/workout-sessions", {
         body: { started_at: new Date().toISOString() },
+        validate: startedWorkout,
       });
       setStarted({ id: row.id, started_at: row.started_at });
-      resource.reload();
+      showHistory(0);
     } catch (error) {
       setStartError(errorMessage(error));
       setUncertain(error instanceof ApiError && error.uncertainWrite);
@@ -261,7 +290,12 @@ export function Workouts() {
               )}
             </Card>
             <Card>
-              <Title>Recent session history</Title>
+              <Title>Session history</Title>
+              <Copy>
+                {data.historyOffset === 0
+                  ? "Most recent sessions"
+                  : `Older sessions · offset ${data.historyOffset}`}
+              </Copy>
               {data.history.items.length ? (
                 data.history.items.map((row) => (
                   <Copy key={row.id}>
@@ -270,8 +304,24 @@ export function Workouts() {
                   </Copy>
                 ))
               ) : (
-                <Copy>No workout sessions recorded yet.</Copy>
+                <Copy>
+                  {data.historyOffset === 0
+                    ? "No workout sessions recorded yet."
+                    : "No older sessions on this page."}
+                </Copy>
               )}
+              <Action
+                secondary
+                label="Newer sessions"
+                disabled={resource.loading || data.historyOffset === 0}
+                onPress={() => showHistory(Math.max(0, data.historyOffset - 5))}
+              />
+              <Action
+                secondary
+                label="Older sessions"
+                disabled={resource.loading || data.history.items.length < 5}
+                onPress={() => showHistory(data.historyOffset + 5)}
+              />
             </Card>
           </>
         )}
@@ -284,7 +334,10 @@ export function Tracking() {
   const api = useApi();
   const load = useCallback(
     (signal: AbortSignal) =>
-      api.request("get", "/api/v1/dashboard/today", { signal }),
+      api.request("get", "/api/v1/dashboard/today", {
+        signal,
+        validate: dashboardData,
+      }),
     [api],
   );
   const resource = useResource(load),
@@ -362,11 +415,13 @@ export function Progress() {
     async (signal: AbortSignal) => {
       const today = await api.request("get", "/api/v1/dashboard/today", {
         signal,
+        validate: dashboardData,
       });
       const start = new Date(today.date + "T12:00:00Z");
       start.setUTCDate(start.getUTCDate() - 6);
       return api.request("get", "/api/v1/progress/overview", {
         signal,
+        validate: progressData,
         query: {
           start_date: start.toISOString().slice(0, 10),
           end_date: today.date,
@@ -463,6 +518,7 @@ export function FoodSearch() {
         ? api.request("get", "/api/v1/foods/search", {
             signal,
             query: { q: query },
+            validate: foodSearchData,
           })
         : null,
     [api, query],

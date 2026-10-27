@@ -1,4 +1,4 @@
-"""Optional synchronous SMTP delivery over verified TLS; no token logging or API fallback."""
+"""Optional verified-TLS email delivery; never expose action tokens or provider errors."""
 
 import smtplib
 import ssl
@@ -6,8 +6,21 @@ from email.message import EmailMessage
 from typing import Protocol
 
 import httpx
+from pydantic import NameEmail, TypeAdapter, ValidationError
 
 from app.core.exceptions import AppError
+
+SENDER = TypeAdapter(NameEmail)
+
+
+def check_sender(value: str | None):
+    """Validate one configured mailbox without claiming domain/provider approval."""
+    if not value or len(value) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
+    try:
+        SENDER.validate_python(value)
+    except ValidationError:
+        raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503) from None
 
 
 class Delivery(Protocol):
@@ -40,15 +53,18 @@ class ResendDelivery:
         self.settings, self.transport = settings, transport
 
     def available(self):
-        if not self.settings.resend_api_key or not self.settings.resend_from:
+        secret = self.settings.resend_api_key
+        key = secret.get_secret_value() if secret else ""
+        if not key or len(key) > 512 or any(not 33 <= ord(char) <= 126 for char in key):
             raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
+        check_sender(self.settings.resend_from)
 
     def send(self, email: str, purpose: str, token: str):
         self.available()
         subject, body = content(purpose, token)
         try:
             with httpx.Client(
-                timeout=5, follow_redirects=False, transport=self.transport
+                timeout=5, verify=True, follow_redirects=False, transport=self.transport
             ) as client:
                 response = client.post(
                     "https://api.resend.com/emails",
@@ -82,24 +98,34 @@ class SmtpDelivery:
         s = self.settings
         if not all([s.smtp_host, s.smtp_username, s.smtp_password, s.smtp_from]):
             raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
+        if (
+            not s.smtp_username.strip()
+            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in s.smtp_host)
+            or any(char in s.smtp_host for char in "/?#@")
+        ):
+            raise AppError("EMAIL_UNAVAILABLE", "Email delivery is not configured", 503)
+        check_sender(s.smtp_from)
 
     def send(self, email: str, purpose: str, token: str):
         self.available()
         s = self.settings
-        message = EmailMessage()
-        message["From"] = s.smtp_from
-        message["To"] = email
-        message["Subject"], body = content(purpose, token)
-        message.set_content(body)
         try:
+            message = EmailMessage()
+            message["From"] = s.smtp_from
+            message["To"] = email
+            message["Subject"], body = content(purpose, token)
+            message.set_content(body)
             context = ssl.create_default_context()
             if s.smtp_port == 465:
-                client = smtplib.SMTP_SSL(s.smtp_host, s.smtp_port, timeout=5, context=context)
+                with smtplib.SMTP_SSL(
+                    s.smtp_host, s.smtp_port, timeout=5, context=context
+                ) as client:
+                    client.login(s.smtp_username, s.smtp_password.get_secret_value())
+                    client.send_message(message)
             else:
-                client = smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=5)
-                client.starttls(context=context)
-            with client:
-                client.login(s.smtp_username, s.smtp_password.get_secret_value())
-                client.send_message(message)
+                with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=5) as client:
+                    client.starttls(context=context)
+                    client.login(s.smtp_username, s.smtp_password.get_secret_value())
+                    client.send_message(message)
         except Exception:
             raise AppError("EMAIL_UNAVAILABLE", "Email delivery is unavailable", 503) from None

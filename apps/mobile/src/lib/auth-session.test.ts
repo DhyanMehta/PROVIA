@@ -103,6 +103,30 @@ test("cold restoration rotates stored credentials once", async () => {
   expect(await disk.read()).toContain("new-refresh");
 });
 
+test("the first requests after a background interval refresh expired access once", async () => {
+  jest.useFakeTimers();
+  try {
+    const transport = jest
+      .fn()
+      .mockResolvedValueOnce(response(tokens()))
+      .mockResolvedValue(response(tokens("refresh-resumed", "access-resumed")));
+    const api = createAuthSession(base, storage(), transport);
+    await api.signIn("test@example.com", "private-password");
+    jest.setSystemTime(Date.now() + 16 * 60 * 1000);
+
+    expect(await Promise.all([api.getToken(), api.getToken()])).toEqual([
+      "access-resumed",
+      "access-resumed",
+    ]);
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(await api.getToken()).toBe("access-resumed");
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(api.getSnapshot().user?.id).toBe(user.id);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test("an interrupted rotation marker is never replayed on restart", async () => {
   const disk = storage(
     JSON.stringify({ refresh: "consumed-maybe", rotating: true }),
@@ -234,4 +258,65 @@ test("failed deletion and offline logout retain a revocation retry without signi
   await api.signOut();
   expect(transport).toHaveBeenCalledTimes(3);
   expect(api.getSnapshot().user).toBeNull();
+});
+
+test("stuck storage read ends restoration and ignores late credentials", async () => {
+  jest.useFakeTimers();
+  try {
+    let finish!: (value: string) => void;
+    const disk = storage();
+    disk.read = jest.fn(() => new Promise(resolve => { finish = resolve; }));
+    const transport = jest.fn();
+    const api = createAuthSession(base, disk, transport);
+    const restoring = api.restore();
+    await jest.advanceTimersByTimeAsync(10000);
+    await restoring;
+    expect(api.getSnapshot()).toMatchObject({ loaded: true, user: null });
+    finish(JSON.stringify({ refresh: "late-old-token", rotating: false }));
+    await Promise.resolve();
+    expect(transport).not.toHaveBeenCalled();
+  } finally { jest.useRealTimers(); }
+});
+
+test("stuck storage clear does not prevent server logout", async () => {
+  jest.useFakeTimers();
+  try {
+    const disk = storage();
+    const transport = jest.fn().mockResolvedValueOnce(response(tokens()))
+      .mockResolvedValue(response({ message: "Signed out" }));
+    const api = createAuthSession(base, disk, transport);
+    await api.signIn("test@example.com", "private-password");
+    disk.clear = jest.fn(() => new Promise(() => {}));
+    const logout = api.signOut();
+    await jest.advanceTimersByTimeAsync(10000);
+    await logout;
+    expect(transport.mock.calls[1][0]).toContain("/auth/logout");
+    expect(api.getSnapshot()).toMatchObject({ user: null, logoutPending: true });
+  } finally { jest.useRealTimers(); }
+});
+
+test("timed out token write stays serialized before cleanup and next login", async () => {
+  jest.useFakeTimers();
+  try {
+    const disk = storage();
+    const originalWrite = disk.write;
+    let finish!: () => void;
+    disk.write = jest.fn().mockImplementationOnce((value: string) => new Promise<void>(resolve => {
+      finish = () => { void originalWrite(value).then(resolve); };
+    })).mockImplementation(originalWrite);
+    const transport = jest.fn().mockResolvedValue(response(tokens()));
+    const api = createAuthSession(base, disk, transport);
+    const login = api.signIn("test@example.com", "private-password");
+    const rejected = expect(login).rejects.toMatchObject({ code: "STORAGE_TIMEOUT" });
+    await jest.advanceTimersByTimeAsync(20000);
+    await rejected;
+    expect(api.getSnapshot().user).toBeNull();
+    const nextLogin = api.signIn("other@example.com", "private-password");
+    expect(transport).toHaveBeenCalledTimes(1);
+    finish();
+    await nextLogin;
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(await disk.read()).toContain("refresh-original");
+    expect(api.getSnapshot().user?.id).toBe(user.id);
+  } finally { jest.useRealTimers(); }
 });

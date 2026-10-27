@@ -13,6 +13,17 @@ export type AuthState = {
   logoutPending?: boolean;
 };
 
+// Native storage cannot be cancelled. Timeout callers without releasing the
+// underlying write queue: late persistence must still precede logout cleanup.
+function storageDeadline<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ApiError(
+      "Secure storage did not respond. Try again.", 0, "STORAGE_TIMEOUT",
+    )), 10000);
+  });
+  return Promise.race([operation, timeout]).finally(() => clearTimeout(timer));
+}
 function validAccount(value: unknown): value is Schema<"AccountOut"> {
   if (!value || typeof value !== "object") return false;
   const account = value as Partial<Schema<"AccountOut">>;
@@ -51,7 +62,7 @@ export function createAuthSession(
   function persist(task: () => Promise<void>) {
     const next = writes.then(task, task);
     writes = next.catch(() => {});
-    return next;
+    return storageDeadline(next);
   }
   async function forget(message: string | null = null) {
     const version = ++generation;
@@ -156,7 +167,7 @@ export function createAuthSession(
     const version = generation;
     restoreFlight = (async () => {
       try {
-        const raw = await storage.read();
+        const raw = await storageDeadline(storage.read());
         if (version !== generation) return;
         if (!raw) {
           publish({ loaded: true, user: null, error: null });

@@ -3,13 +3,42 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 from uuid import uuid4
+from xml.etree import ElementTree
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
 from app.db.session import postgres_url
+
+
+def redact(value: str, secrets) -> str:
+    variants = {variant for secret in secrets if secret for variant in (secret, repr(secret)[1:-1])}
+    for value_to_hide in sorted(variants, key=len, reverse=True):
+        value = value.replace(value_to_hide, "[redacted]")
+    return value
+
+
+def sanitize_junit(arguments, secrets):
+    """Pytest writes XML before console redaction; sanitize decoded text/attributes too."""
+    for index, argument in enumerate(arguments):
+        option, separator, value = argument.partition("=")
+        if option not in {"--junitxml", "--junit-xml"}:
+            continue
+        path = Path(value if separator else arguments[index + 1])
+        if not path.exists():
+            continue
+        tree = ElementTree.parse(path)
+        for node in tree.iter():
+            if node.text:
+                node.text = redact(node.text, secrets)
+            if node.tail:
+                node.tail = redact(node.tail, secrets)
+            for key, item in node.attrib.items():
+                node.set(key, redact(item, secrets))
+        tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
 def main() -> int:
@@ -38,22 +67,25 @@ def main() -> int:
         )
         environment["TEST_DATABASE_DISPOSABLE"] = "true"
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-v", *sys.argv[1:]],
+            [sys.executable, "-m", "pytest", "-v", "--tb=short", *sys.argv[1:]],
             env=environment,
             capture_output=True,
             text=True,
         )
-        output = result.stdout + result.stderr
-        for secret in (
+        secrets = (
             url.password,
             url.host,
             url.username,
             environment["TEST_DATABASE_URL"],
             settings.direct_database_url.get_secret_value(),
-        ):
-            if secret:
-                output = output.replace(secret, "[redacted]")
-        print(output)
+            *(
+                value.get_secret_value()
+                for value in (getattr(settings, name) for name in type(settings).model_fields)
+                if hasattr(value, "get_secret_value")
+            ),
+        )
+        sanitize_junit(sys.argv[1:], secrets)
+        print(redact(result.stdout + result.stderr, secrets))
         return result.returncode
     except Exception:
         print("BLOCKED: unable to create or use disposable PostgreSQL database; details suppressed")
@@ -67,5 +99,14 @@ def main() -> int:
         admin.dispose()
 
 
+def run() -> int:
+    try:
+        return main()
+    except Exception:
+        # Configuration and finally/cleanup failures must not expose driver data.
+        print("BLOCKED: test runner initialization or cleanup failed; details suppressed")
+        return 2
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())
