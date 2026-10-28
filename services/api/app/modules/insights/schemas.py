@@ -67,12 +67,23 @@ class SleepDay(Output):
     duration_seconds: float | None
 
 
+class MacroAdherence(Output):
+    target_g: Decimal | None
+    consumed_g: Decimal | None
+    remaining_g: Decimal | None
+    adherence_ratio: Decimal | None
+
+
 class NutritionDay(Output):
     has_logs: bool
     calories_consumed: Decimal | None
     calories_target: Decimal | None
     goal_id: UUID | None
     adherence_ratio: Decimal | None
+    protein: MacroAdherence
+    carbs: MacroAdherence
+    fat: MacroAdherence
+    fiber: MacroAdherence
 
 
 class ProgressDay(Output):
@@ -105,6 +116,14 @@ class ProgressOverview(RangeOut):
     workouts: WorkoutSummary
 
 
+class DashboardGoal(Output):
+    id: UUID
+    goal_type: str
+    target_weight_kg: Decimal | None
+    current_weight_kg_snapshot: Decimal | None
+    daily_steps_target: int | None
+
+
 class DailyDashboard(Output):
     date: date
     timezone: str
@@ -114,6 +133,7 @@ class DailyDashboard(Output):
     sleep: SleepDay
     workouts: WorkoutSummary
     weight: WeightSnapshot | None
+    goal: DashboardGoal | None
 
 
 class SleepPoint(Output):

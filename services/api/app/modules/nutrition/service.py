@@ -101,6 +101,37 @@ class NutritionService:
             raise AppError("RESOURCE_NOT_FOUND", "Recipe was not found", 404)
         return self.recipe_output(recipe, self.food(user_id, recipe.food_id))
 
+    def recipes(self, user_id, limit, offset):
+        recipes = self.repository.recipes(user_id, limit, offset)
+        foods = {
+            food.id: food for food in self.repository.foods(user_id, [r.food_id for r in recipes])
+        }
+        return [self.recipe_output(recipe, foods[recipe.food_id]) for recipe in recipes]
+
+    def quantity(self, user_id, food_id, quantity_g):
+        food = self.food(user_id, food_id)
+        return {
+            "food_id": food.id,
+            "quantity_g": quantity_g,
+            **{name: consumed(getattr(food, name), quantity_g) for name in NUTRIENTS},
+        }
+
+    def barcode(self, user_id, barcode, provider):
+        cached = self.repository.barcode(user_id, barcode)
+        if cached is not None:
+            return cached
+        if provider is None:
+            raise AppError("FOOD_PROVIDERS_UNAVAILABLE", "Barcode provider is unavailable", 503)
+        try:
+            foods = provider.barcode(barcode)
+        except ProviderError:
+            raise AppError(
+                "FOOD_PROVIDERS_UNAVAILABLE", "Barcode provider is unavailable", 503
+            ) from None
+        if not foods:
+            raise AppError("RESOURCE_NOT_FOUND", "No supported gram-based food was found", 404)
+        return self.repository.import_foods(foods)[0]
+
     @staticmethod
     def recipe_output(recipe, food):
         return {
@@ -112,30 +143,55 @@ class NutritionService:
             "created_at": recipe.created_at,
         }
 
-    def search(self, user_id, query, providers, local_source=None):
-        items = {
-            food.id: food for food in self.repository.local_search(user_id, query, local_source)
-        }
+    def search(self, user_id, query, providers, local_source=None, page=1, page_size=20):
+        # Pages apply independently to local and each provider source, not a globally
+        # ranked federation. Fetch external results before flushing imported rows.
+        remote_only = local_source in {"usda", "open_food_facts"}
+        items = {}
+        if not remote_only:
+            items = {
+                food.id: food
+                for food in self.repository.local_search(
+                    user_id, query, local_source, page_size, (page - 1) * page_size
+                )
+            }
         statuses = {}
+        pending = []
         for source, provider in providers.items():
             try:
-                for food in self.repository.import_foods(provider.search(query)):
-                    items[food.id] = food
+                pending.extend(provider.search(query, page=page, page_size=page_size))
                 statuses[source] = "ok"
             except ProviderError as exc:
                 statuses[source] = "cached" if exc.cached_foods is not None else str(exc)
                 if exc.cached_foods is not None:
-                    for food in self.repository.import_foods(exc.cached_foods):
+                    pending.extend(exc.cached_foods)
+                elif remote_only:
+                    for food in self.repository.local_search(
+                        user_id, query, local_source, page_size, (page - 1) * page_size
+                    ):
                         items[food.id] = food
+                    if items:
+                        statuses[source] = "cached_catalog"
+        # One bounded batch also deduplicates repeated provider identifiers.
+        if pending or any(status in {"ok", "cached"} for status in statuses.values()):
+            for food in self.repository.import_foods(pending):
+                items[food.id] = food
         if (
             providers
-            and all(status not in {"ok", "cached"} for status in statuses.values())
+            and all(
+                status not in {"ok", "cached", "cached_catalog"} for status in statuses.values()
+            )
             and not items
         ):
             raise AppError(
                 "FOOD_PROVIDERS_UNAVAILABLE", "Food search providers are unavailable", 503
             )
-        return {"items": list(items.values()), "provider_status": statuses}
+        return {
+            "items": list(items.values()),
+            "provider_status": statuses,
+            "page": page,
+            "page_size": page_size,
+        }
 
     def make_items(self, user_id, inputs):
         foods = {
@@ -191,14 +247,33 @@ class NutritionService:
         profile = self.repository.profile(user_id)
         return profile.timezone if profile else "UTC"
 
-    def list_meals(self, user_id, day, limit, offset):
-        start, end = day_bounds(day, self.timezone(user_id)) if day else (None, None)
+    def list_meals(self, user_id, day, limit, offset, start_date=None, end_date=None):
+        if day is not None and (start_date is not None or end_date is not None):
+            raise AppError("INVALID_DATE_RANGE", "Use date or a start/end date range", 422)
+        if (start_date is None) != (end_date is None):
+            raise AppError("INVALID_DATE_RANGE", "Supply both start_date and end_date", 422)
+        timezone = self.timezone(user_id)
+        start, end = day_bounds(day, timezone) if day else (None, None)
+        if start_date is not None:
+            if start_date > end_date or (end_date - start_date).days > 365:
+                raise AppError(
+                    "INVALID_DATE_RANGE", "Use an ordered range of at most 366 days", 422
+                )
+            start = day_bounds(start_date, timezone)[0]
+            end = day_bounds(end_date, timezone)[1]
         return self.repository.meals(user_id, start, end, limit, offset)
 
     def day_data(self, user_id, day):
         timezone = self.timezone(user_id)
         start, end = day_bounds(day, timezone)
-        meals = self.repository.meals(user_id, start, end)
+        # A daily response includes complete meals and their bounded item lists.
+        # Reject excessive days explicitly instead of hydrating unbounded history
+        # or returning a silently truncated total. Full history stays paginated.
+        meals = self.repository.meals(user_id, start, end, limit=101)
+        if len(meals) > 100:
+            raise AppError(
+                "ANALYTICS_LIMIT", "Too many meals for a daily summary; use paginated history", 422
+            )
         goal = self.repository.goal_at(user_id, end)
         targets = None
         if goal:
@@ -222,11 +297,15 @@ class NutritionService:
         return summary
 
     def dashboard(self, user_id, day):
+        return self.dashboard_with_goal(user_id, day)[0]
+
+    def dashboard_with_goal(self, user_id, day):
+        """Resolve one historical goal for both displayed budgets and goal context."""
         summary, goal = self.day_data(user_id, day)
         targets = summary["targets"] or dict.fromkeys(NUTRIENTS)
         consumed_totals = summary["totals"]
         daily_target = targets["calories_kcal"]
-        return {
+        result = {
             "date": day,
             "timezone": summary["timezone"],
             "meals": summary["meals"],
@@ -245,6 +324,7 @@ class NutritionService:
             "fat": macro_budget(targets["fat_g"], consumed_totals["fat_g"], 9),
             "fiber": macro_budget(targets["fiber_g"], consumed_totals["fiber_g"], None),
         }
+        return result, goal
 
     @staticmethod
     def output(meal):

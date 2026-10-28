@@ -1,7 +1,7 @@
 from sqlalchemy import or_, select, update
 
 from app.core.exceptions import AppError
-from app.db.models import Exercise, WorkoutPlan, WorkoutPlanDay
+from app.db.models import Exercise, WorkoutPlan, WorkoutPlanDay, WorkoutSession
 from app.modules.tracking.repository import TrackingRepository
 
 
@@ -52,6 +52,30 @@ class WorkoutRepository(TrackingRepository):
             select(WorkoutPlan)
             .where(WorkoutPlan.user_id == user_id)
             .order_by(WorkoutPlan.created_at.desc(), WorkoutPlan.id)
+            .limit(limit)
+            .offset(offset)
+        ).all()
+
+    def active_session(self, user_id):
+        # Existing imports can contain multiple open rows. Never rewrite history;
+        # expose the newest and allow all of them to be resolved through the list.
+        return self.session.scalar(
+            select(WorkoutSession)
+            .where(WorkoutSession.user_id == user_id, WorkoutSession.status == "in_progress")
+            .order_by(WorkoutSession.started_at.desc(), WorkoutSession.id)
+            .limit(1)
+        )
+
+    def sessions(self, user_id, begin, finish, status, limit, offset):
+        statement = select(WorkoutSession).where(
+            WorkoutSession.user_id == user_id,
+            WorkoutSession.started_at >= begin,
+            WorkoutSession.started_at < finish,
+        )
+        if status is not None:
+            statement = statement.where(WorkoutSession.status == status)
+        return self.session.scalars(
+            statement.order_by(WorkoutSession.started_at, WorkoutSession.id)
             .limit(limit)
             .offset(offset)
         ).all()

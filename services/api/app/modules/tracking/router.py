@@ -7,16 +7,31 @@ from app.core.auth import CurrentUser
 from app.db.dependencies import DbSession
 from app.db.models import SleepSession, WaterLog
 from app.modules.common import Limit, Offset, Page, day_bounds
+from app.modules.idempotency import IdempotencyKey, create_once
 from app.modules.tracking import schemas as s
 from app.modules.tracking.repository import TrackingRepository
-from app.modules.tracking.service import TrackingService
+from app.modules.tracking.service import TrackingService, date_range
 
 router = APIRouter(tags=["tracking"])
 
 
 @router.post("/water-logs", response_model=s.WaterOut, status_code=201)
-def add_water(data: s.WaterCreate, user: CurrentUser, session: DbSession):
-    return TrackingService(TrackingRepository(session)).add_water(user.id, data)
+def add_water(
+    data: s.WaterCreate,
+    user: CurrentUser,
+    session: DbSession,
+    idempotency_key: IdempotencyKey = None,
+):
+    repository = TrackingRepository(session)
+    return create_once(
+        repository,
+        user.id,
+        "water-log",
+        idempotency_key,
+        data,
+        lambda: TrackingService(repository).add_water(user.id, data),
+        lambda row_id: repository.owned(WaterLog, user.id, row_id),
+    )
 
 
 @router.get("/water-logs", response_model=Page[s.WaterOut])
@@ -66,9 +81,54 @@ def activity(date: date, user: CurrentUser, session: DbSession):
     return repository.activity(user.id, date)
 
 
+@router.get("/activity", response_model=Page[s.ActivityOut])
+def activities(
+    user: CurrentUser,
+    session: DbSession,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: Limit = 20,
+    offset: Offset = 0,
+):
+    """List stored local-day snapshots; omitted days have no inferred zero values."""
+    repository = TrackingRepository(session)
+    start, end, _, _ = date_range(start_date, end_date, repository.timezone(user.id))
+    return {
+        "items": repository.activities(user.id, start, end, limit, offset),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.delete("/activity/daily", status_code=204)
+def delete_activity(date: date, user: CurrentUser, session: DbSession):
+    """Delete the owned daily snapshot. Clients must discard obsolete queued uploads."""
+    repository = TrackingRepository(session)
+    day_bounds(date, repository.timezone(user.id))
+    repository.lock_user(user.id)
+    row = repository.activity(user.id, date)
+    if row is not None:
+        repository.delete(row)
+    return Response(status_code=204)
+
+
 @router.post("/sleep-sessions", response_model=s.SleepOut, status_code=201)
-def add_sleep(data: s.SleepCreate, user: CurrentUser, session: DbSession):
-    return TrackingService(TrackingRepository(session)).sleep(user.id, data)
+def add_sleep(
+    data: s.SleepCreate,
+    user: CurrentUser,
+    session: DbSession,
+    idempotency_key: IdempotencyKey = None,
+):
+    repository = TrackingRepository(session)
+    return create_once(
+        repository,
+        user.id,
+        "sleep-session",
+        idempotency_key,
+        data,
+        lambda: TrackingService(repository).sleep(user.id, data),
+        lambda row_id: repository.owned(SleepSession, user.id, row_id),
+    )
 
 
 @router.get("/sleep-sessions", response_model=Page[s.SleepOut])

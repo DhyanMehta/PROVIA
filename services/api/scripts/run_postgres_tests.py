@@ -1,6 +1,7 @@
 """Create a fresh disposable PostgreSQL database for tests, then remove only that DB."""
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,14 @@ def redact(value: str, secrets) -> str:
     variants = {variant for secret in secrets if secret for variant in (secret, repr(secret)[1:-1])}
     for value_to_hide in sorted(variants, key=len, reverse=True):
         value = value.replace(value_to_hide, "[redacted]")
+    # Pytest assertion introspection can include generated credentials that are
+    # not in Settings. Strip compact JWTs and bearer values from diagnostics too.
+    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+-]+", "Bearer [redacted]", value)
+    value = re.sub(
+        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        "[redacted-jwt]",
+        value,
+    )
     return value
 
 

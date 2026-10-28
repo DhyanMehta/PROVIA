@@ -13,6 +13,7 @@ Load = Annotated[Decimal, Field(ge=0, le=10000, max_digits=8, decimal_places=3)]
 Seconds = Annotated[int, Field(ge=0, le=86400)]
 Category = Literal["strength", "cardio", "mobility", "flexibility", "bodyweight"]
 Difficulty = Literal["beginner", "intermediate", "advanced"]
+SessionStatus = Literal["in_progress", "completed", "cancelled"]
 
 
 class ExerciseCreate(Input):

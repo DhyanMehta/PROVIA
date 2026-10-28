@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from app.db.models import SleepSession, WaterLog
 from app.modules.common import day_bounds
-from app.modules.nutrition.calculations import totals
+from app.modules.nutrition.calculations import remaining, totals
 from app.modules.nutrition.repository import NutritionRepository
 from app.modules.nutrition.service import NutritionService
 from app.modules.tracking.schemas import ActivityOut, SleepOut, WaterOut
@@ -26,6 +26,16 @@ def grouped(rows, key):
     for row in rows:
         result[key(row)].append(row)
     return result
+
+
+def macro_adherence(consumed, target):
+    """Observed grams versus the historical target; unknown and zero stay distinct."""
+    return {
+        "target_g": target,
+        "consumed_g": consumed,
+        "remaining_g": remaining(target, consumed),
+        "adherence_ratio": consumed / target if consumed is not None and target else None,
+    }
 
 
 class InsightsService:
@@ -153,7 +163,8 @@ class InsightsService:
                 transition_index += 1
             water_total = sum((row.amount_ml for row in water[day]), Decimal(0))
             food_items = [item for meal in meals_by_day[day] for item in items_by_meal[meal.id]]
-            consumed = totals(food_items)["calories_kcal"] if meals_by_day[day] else None
+            nutrients = totals(food_items) if meals_by_day[day] else {}
+            consumed = nutrients.get("calories_kcal")
             calories_target = goal.daily_calorie_target if goal else None
             daily.append(
                 {
@@ -188,6 +199,13 @@ class InsightsService:
                         "adherence_ratio": consumed / calories_target
                         if consumed is not None and calories_target
                         else None,
+                        **{
+                            name: macro_adherence(
+                                nutrients.get(name + "_g"),
+                                getattr(goal, name + "_target_g") if goal else None,
+                            )
+                            for name in ("protein", "carbs", "fat", "fiber")
+                        },
                     },
                 }
             )
@@ -219,12 +237,12 @@ class InsightsService:
         summary = data["daily"][0]
         end = day_bounds(day, timezone)[1]
         weight = self.repository.latest_weight(user_id, end)
+        nutrition_repository = NutritionRepository(self.repository.session)
+        nutrition, goal = NutritionService(nutrition_repository).dashboard_with_goal(user_id, day)
         return {
             "date": day,
             "timezone": timezone,
-            "nutrition": NutritionService(NutritionRepository(self.repository.session)).dashboard(
-                user_id, day
-            ),
+            "nutrition": nutrition,
             "water": summary["water"],
             "activity": summary["activity"],
             "sleep": summary["sleep"],
@@ -232,6 +250,7 @@ class InsightsService:
             "weight": {"weight_kg": weight.weight_kg, "recorded_at": weight.recorded_at}
             if weight
             else None,
+            "goal": goal,
         }
 
     def water_dashboard(self, user_id, day):

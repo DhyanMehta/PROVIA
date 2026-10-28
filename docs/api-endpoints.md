@@ -1,5 +1,10 @@
 # API endpoints
 
+Phase 4 current contract: see [frontend handoff](frontend-api-handoff.md) and the
+[generated complete endpoint inventory](backend-endpoint-inventory.md) (67 paths,
+91 operations). Migration `0007` is prepared, not applied to the existing database.
+Live deployment, real email and Android acceptance remain unverified.
+
 Day3 integration references: [frontend contracts](frontend-api-integration.md),
 [Health Connect sync](health-connect-integration.md), and [operations](backend-operations.md).
 Generated OpenAPI and TypeScript are in `packages/api-contracts`. Error responses are
@@ -11,7 +16,9 @@ No endpoint paths or success payloads changed in Day3. `/health/ready` retains s
 readiness; `/health/db` is the database-dependent deployment readiness probe.
 
 Default prefix: `/api/v1`. Swagger is `/docs`, schema is `/openapi.json`.
-All routes below except health and calculation previews require a verified Bearer token. UUID IDs are
+Business routes require a verified first-party Bearer session. Public auth actions,
+health and calculation previews do not; `/auth/me` and `/onboarding` accept a valid
+pending-verification session. See the generated inventory for exact authorization. UUID IDs are
 server generated. Requests reject unknown fields. Decimal numbers are returned as
 strings to preserve precision. Request timestamps must include an offset; stored
 timestamps are timezone-aware. The examples contain no credentials.
@@ -90,7 +97,7 @@ order must be unique. Plans support at most7 days and50 exercises per day. Rest 
 cannot contain exercises. Starting a rest-day session is422; start an unplanned
 session instead. Snapshot fields are server-owned. Completed/cancelled sessions
 cannot be reopened or edited. Completion time cannot precede start time; a completed
-empty workout is permitted. New sessions support at most500 sets.
+duration-only workout without sets is permitted only with positive elapsed time. New sessions support at most500 sets.
 
 Set inputs: exercise_id, set_number, reps(default0), weight_kg(default0), kind
 (`working`/`warmup`), is_completed, is_skipped, duration_seconds, rest_seconds and notes.
@@ -155,8 +162,9 @@ records are actual maxima within the selected range. No estimated1RM is reported
 
 List pagination: `limit` defaults to 20 (1–100); `offset` defaults to 0.
 Response: `{ "items": [...], "limit": 20, "offset": 0 }`.
-Food search instead returns `{ "items": [...], "provider_status": {...} }` with a
-bounded result set. Search imports supported provider records into the local catalog;
+Food search returns `{ "items": [...], "provider_status": {...}, "page": 1, "page_size": 20 }`.
+Each selected source pages independently (page1–1000, page_size1–100); results are bounded
+and deduplicated by UUID, without a global federation cursor. Search imports supported provider records into the local catalog;
 returned UUIDs can be used directly in meal requests. No external provider ID is accepted
 as a local UUID. Provider failures are explicit; stale/local results can still be returned.
 
@@ -193,7 +201,7 @@ contract. Outputs include all computed grams/kcal, current_weight_kg_snapshot,
 calculation_method and calculation_version. See [formulas](nutrition-calculation.md).
 
 PATCH input changes create a new goal UUID, preserving previous calculated values.
-Status/label-only edits update the selected record. One active goal is enforced.
+Step-target/type edits also create revisions; status-only edits update the selected record. One active goal is enforced.
 Updating profile current weight recalculates an active calculated goal as a new row;
 unchanged profile weight does not override an explicit goal weight snapshot. Goal
 inputs do not silently rewrite profile weight. Legacy rows remain readable; activation
@@ -239,7 +247,8 @@ items and recalculates snapshots. A PATCH with only notes, consumed_at, or meal_
 does not recalculate them. Shared catalog updates never rewrite historical snapshots.
 
 Daily responses contain date, timezone, totals, targets (null without an active goal),
-and meals. A missing nutrient in any included item makes that nutrient total null.
+and meals. Phase4 daily aggregation rejects more than100meals with422 ANALYTICS_LIMIT
+before totals; paginated history remains available and no partial total is returned. A missing nutrient in any included item makes that nutrient total null.
 Empty periods total zero. Day boundaries use the profile's IANA timezone or UTC.
 
 Dashboard adds maintenance_calories, selected_deficit_kcal, daily_calorie_target,
@@ -291,9 +300,11 @@ To reuse a logged weight with the active goal's target weight and deficit:
 1. POST /weight-logs/{weight_id}/goal-preview (authenticated, no body). Returns full
    calculated targets plus base_goal_id and weight_log_id; no records are changed.
 2. POST /weight-logs/{weight_id}/apply-goal with
-   `{"expected_goal_id":"UUID_FROM_PREVIEW"}`. Returns201 with a new GoalOut UUID.
+   `{"expected_goal_id":"UUID_FROM_PREVIEW","expected_weight_kg":"WEIGHT_FROM_PREVIEW"}`. Returns201 with a new GoalOut UUID.
    The prior goal is preserved and its historical period remains available.
-3. If the active goal changed since preview, confirmation returns409 GOAL_CHANGED.
+3. If the active goal or measurement changed since preview, confirmation returns409
+   GOAL_CHANGED or WEIGHT_CHANGED. Phase4 requires expected_weight_kg to prevent
+   applying a silently changed measurement.
    Preview again; do not silently confirm against different inputs.
 
 Foreign/missing weight IDs return404. Without a calculated active goal, return422
@@ -341,4 +352,7 @@ blocking a request indefinitely. Other4xx/redirect errors are not retried. Succe
 cached query results may be reused for up to FOOD_PROVIDER_STALE_SECONDS after expiry
 (default3600), labeled cached. Persisted catalog rows remain searchable separately.
 Failures do not prevent local/USDA results. Total provider failure with no local/stale
-results returns a generic503. No barcode API was added.
+results returns a generic503. Phase4 adds GET `/foods/barcode/{barcode}` (8–14ASCII digits), gram quantity preview,
+paginated recipe listing and optional UUID retry keys on the documented create routes.
+Provider refresh contention fails fast; streamed decoded JSON is capped at2MiB
+and64containers of nesting. See the frontend handoff for exact request/retry semantics.

@@ -1,5 +1,10 @@
 # Backend architecture
 
+Current Phase 4 source architecture is [backend-final-architecture.md](backend-final-architecture.md).
+The Day 1–3 narrative below is historical, including its former Clerk/JWKS identity
+description. Runtime now uses first-party sessions and the encrypted email outbox;
+use the [current API handoff](frontend-api-handoff.md) for implementation decisions.
+
 Day3 keeps the modular monolith. `app/application.py` owns the factory without a
 default application instance; `app/main.py` remains the ASGI entry point and re-exports
 create_app. This lets the contracts exporter build an app with init-only settings,

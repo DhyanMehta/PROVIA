@@ -1,5 +1,6 @@
 """HTTP adapters: preserve unknown nutrients; accept only a known gram basis."""
 
+import json
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -7,6 +8,7 @@ from random import uniform
 from threading import Lock
 from time import monotonic, sleep
 from typing import Literal
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field
@@ -68,11 +70,30 @@ class FoodProvider:
         self._next_request_at = 0.0
         self._lock = Lock()
 
-    def search(self, query: str) -> list[NormalizedFood]:
-        key = query.strip().casefold()
-        if not key:
+    def search(self, query: str, page=1, page_size=20) -> list[NormalizedFood]:
+        text = query.strip().casefold()
+        if not text:
             return []
-        with self._lock:
+        if not 1 <= page <= 1000 or not 1 <= page_size <= 100:
+            raise ProviderError("invalid_request")
+        key = ("search", text, page, page_size)
+        return self._cached(key, lambda: self.fetch_search(query.strip(), page, page_size))
+
+    def _cached(self, key, fetch):
+        now = monotonic()
+        cached = self._cache.get(key)
+        if cached and cached[0] > now:
+            return [food.model_copy(deep=True) for food in cached[1]]
+        # A slow provider must not queue unbounded request threads behind its
+        # retry lock. Cached results remain usable while one request refreshes.
+        if not self._lock.acquire(blocking=False):
+            stale = (
+                [food.model_copy(deep=True) for food in cached[1]]
+                if cached and now <= cached[0] + self.settings.food_provider_stale_seconds
+                else None
+            )
+            raise ProviderError("rate_limited", stale)
+        try:
             now = monotonic()
             cached = self._cache.get(key)
             if cached and cached[0] > now:
@@ -81,7 +102,7 @@ class FoodProvider:
                 if now < self._next_request_at:
                     raise ProviderError("rate_limited")
                 self._next_request_at = now + self.settings.food_provider_min_interval_seconds
-                result = self.fetch_search(query.strip())
+                result = fetch()
             except ProviderError as error:
                 if (
                     cached
@@ -97,6 +118,36 @@ class FoodProvider:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[key] = (now + self.settings.food_provider_cache_seconds, result)
             return [food.model_copy(deep=True) for food in result]
+        finally:
+            self._lock.release()
+
+    @staticmethod
+    def read_json(response):
+        body = bytearray()
+        for chunk in response.iter_bytes(chunk_size=65536):
+            body.extend(chunk)
+            if len(body) > 2 * 1024 * 1024:
+                raise ProviderError("invalid_response")
+        try:
+            data = json.loads(body)
+        except (ValueError, UnicodeError, RecursionError):
+            raise ProviderError("invalid_response") from None
+        if not isinstance(data, dict):
+            raise ProviderError("invalid_response")
+        # Limit structural complexity even on decoders that accept deep nesting.
+        # Iterator frames keep traversal memory proportional to depth, not width.
+        stack = [iter([data])]
+        while stack:
+            try:
+                node = next(stack[-1])
+            except StopIteration:
+                stack.pop()
+                continue
+            if isinstance(node, (dict, list)):
+                if len(stack) > 64:
+                    raise ProviderError("invalid_response")
+                stack.append(iter(node.values() if isinstance(node, dict) else node))
+        return data
 
     @staticmethod
     def retry_after(value):
@@ -116,7 +167,7 @@ class FoodProvider:
             except (TypeError, ValueError, OverflowError):
                 return None
 
-    def fetch(self, url: str, params: dict) -> dict:
+    def fetch(self, url: str, params: dict, *, product_lookup=False) -> dict:
         with httpx.Client(
             timeout=httpx.Timeout(
                 self.settings.food_http_timeout_seconds,
@@ -133,28 +184,24 @@ class FoodProvider:
                         self._next_request_at,
                         monotonic() + self.settings.food_provider_min_interval_seconds,
                     )
-                    response = client.get(url, params=params)
-                    status = response.status_code
-                    if status == 429 or status >= 500:
-                        category = "rate_limited" if status == 429 else "provider_unavailable"
-                        retry_delay = self.retry_after(response.headers.get("Retry-After"))
-                    elif status >= 300:
-                        category = (
-                            "invalid_endpoint"
-                            if status in {301, 302, 307, 308, 404, 410}
-                            else "invalid_request"
-                        )
-                        if status in {401, 403}:
-                            category = "access_denied"
-                        raise ProviderError(category)
-                    else:
-                        try:
-                            data = response.json()
-                        except ValueError:
-                            raise ProviderError("invalid_response") from None
-                        if not isinstance(data, dict):
-                            raise ProviderError("invalid_response")
-                        return data
+                    with client.stream("GET", url, params=params) as response:
+                        status = response.status_code
+                        if product_lookup and status == 404:
+                            return {"status": 0}
+                        if status == 429 or status >= 500:
+                            category = "rate_limited" if status == 429 else "provider_unavailable"
+                            retry_delay = self.retry_after(response.headers.get("Retry-After"))
+                        elif status >= 300:
+                            category = (
+                                "invalid_endpoint"
+                                if status in {301, 302, 307, 308, 404, 410}
+                                else "invalid_request"
+                            )
+                            if status in {401, 403}:
+                                category = "access_denied"
+                            raise ProviderError(category)
+                        else:
+                            return self.read_json(response)
                 except httpx.TimeoutException:
                     category = "timeout"
                 except httpx.RequestError:
@@ -170,7 +217,7 @@ class FoodProvider:
 
 
 class USDAProvider(FoodProvider):
-    def fetch_search(self, query: str) -> list[NormalizedFood]:
+    def fetch_search(self, query: str, page=1, page_size=10) -> list[NormalizedFood]:
         key = self.settings.usda_api_key
         if not key or not key.get_secret_value():
             raise ProviderError("not_configured")
@@ -179,7 +226,8 @@ class USDAProvider(FoodProvider):
             {
                 "api_key": key.get_secret_value(),
                 "query": query,
-                "pageSize": 10,
+                "pageSize": page_size,
+                "pageNumber": page,
                 "dataType": "Foundation",
             },
         )
@@ -187,15 +235,25 @@ class USDAProvider(FoodProvider):
         if not isinstance(foods, list):
             raise ProviderError("invalid_response")
         return [
-            food for row in foods[:10] if isinstance(row, dict) and (food := self.normalize(row))
+            food
+            for row in foods[:page_size]
+            if isinstance(row, dict) and (food := self.normalize(row))
         ]
 
     @staticmethod
     def normalize(row: dict) -> NormalizedFood | None:
         # Branded records can be volume-based. Do not assume a liquid's density.
-        if row.get("dataType") not in {"Foundation", "SR Legacy", "Survey (FNDDS)"}:
+        if not isinstance(row.get("dataType"), str) or row["dataType"] not in {
+            "Foundation",
+            "SR Legacy",
+            "Survey (FNDDS)",
+        }:
             return None
-        if not row.get("fdcId") or not isinstance(row.get("description"), str):
+        if (
+            not row.get("fdcId")
+            or not isinstance(row.get("description"), str)
+            or not row["description"].strip()
+        ):
             return None
         mapping = {
             1008: ("calories_kcal", "KCAL"),
@@ -233,14 +291,20 @@ class USDAProvider(FoodProvider):
             name=row["description"][:300],
             source="usda",
             source_food_id=str(row["fdcId"])[:100],
+            source_url="https://fdc.nal.usda.gov/",
+            license_name="CC0 1.0",
             **values,
         )
 
 
 class OpenFoodFactsProvider(FoodProvider):
     max_attempts = 3
+    fields = (
+        "code,product_name,brands,nutriments,nutrition_data_per,"
+        "product_quantity_unit,serving_quantity_unit,serving_quantity,serving_size"
+    )
 
-    def fetch_search(self, query: str) -> list[NormalizedFood]:
+    def fetch_search(self, query: str, page=1, page_size=10) -> list[NormalizedFood]:
         # Legacy CGI supports free text; v2 search is a structured filter API.
         data = self.fetch(
             "https://world.openfoodfacts.org/cgi/search.pl",
@@ -249,17 +313,41 @@ class OpenFoodFactsProvider(FoodProvider):
                 "search_simple": 1,
                 "action": "process",
                 "json": 1,
-                "page_size": 10,
-                "fields": "code,product_name,brands,nutriments,nutrition_data_per,"
-                "product_quantity_unit,serving_quantity_unit,serving_quantity,serving_size",
+                "page_size": page_size,
+                "page": page,
+                "fields": self.fields,
             },
         )
         products = data.get("products")
         if not isinstance(products, list):
             raise ProviderError("invalid_response")
         return [
-            food for row in products[:10] if isinstance(row, dict) and (food := self.normalize(row))
+            food
+            for row in products[:page_size]
+            if isinstance(row, dict) and (food := self.normalize(row))
         ]
+
+    def barcode(self, barcode: str) -> list[NormalizedFood]:
+        if not barcode.isascii() or not barcode.isdigit() or not 8 <= len(barcode) <= 14:
+            raise ProviderError("invalid_request")
+        return self._cached(("barcode", barcode), lambda: self.fetch_barcode(barcode))
+
+    def fetch_barcode(self, barcode):
+        # Fixed provider origin and numeric path only; no user-controlled URLs.
+        data = self.fetch(
+            "https://world.openfoodfacts.org/api/v2/product/" + barcode,
+            {"fields": self.fields},
+            product_lookup=True,
+        )
+        if data.get("status") == 0:
+            return []
+        row = data.get("product")
+        if data.get("status") != 1 or not isinstance(row, dict):
+            raise ProviderError("invalid_response")
+        if str(row.get("code")) != barcode:
+            raise ProviderError("invalid_response")
+        food = self.normalize(row)
+        return [food] if food is not None else []
 
     @staticmethod
     def normalize(row: dict) -> NormalizedFood | None:
@@ -269,7 +357,11 @@ class OpenFoodFactsProvider(FoodProvider):
         }
         if row.get("nutrition_data_per") != "100g" or "g" not in units or units & {"ml", "cl", "l"}:
             return None
-        if not row.get("code") or not isinstance(row.get("product_name"), str):
+        if (
+            not row.get("code")
+            or not isinstance(row.get("product_name"), str)
+            or not row["product_name"].strip()
+        ):
             return None
         raw = row.get("nutriments") or {}
         if not isinstance(raw, dict):
@@ -302,6 +394,9 @@ class OpenFoodFactsProvider(FoodProvider):
             name=row["product_name"][:300],
             source="open_food_facts",
             source_food_id=str(row["code"])[:100],
+            source_url="https://world.openfoodfacts.org/product/"
+            + quote(str(row["code"])[:100], safe=""),
+            license_name="Open Database License (ODbL)",
             brand=brand[:200] if isinstance(brand, str) else None,
             portions=portions,
             **values,

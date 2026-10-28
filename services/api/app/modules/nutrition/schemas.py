@@ -67,6 +67,18 @@ class FoodOut(Output):
 class SearchOut(Output):
     items: list[FoodOut]
     provider_status: dict[str, str]
+    page: int = 1
+    page_size: int = 20
+
+
+class FoodQuantityOut(Output):
+    food_id: UUID
+    quantity_g: Decimal
+    calories_kcal: Decimal | None
+    protein_g: Decimal | None
+    carbs_g: Decimal | None
+    fat_g: Decimal | None
+    fiber_g: Decimal | None
 
 
 class RecipeIngredientInput(Input):

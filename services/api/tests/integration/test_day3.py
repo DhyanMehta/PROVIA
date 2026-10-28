@@ -1,13 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.db.models import DailyActivity, User, WaterLog
+from app.db.models import DailyActivity, RequestReceipt, User, WaterLog
 
 pytestmark = pytest.mark.integration
 
@@ -27,6 +28,8 @@ def test_failed_commit_does_not_report_success_or_persist(authenticated_client, 
     api, headers = authenticated_client
     own = headers()
     assert api.get("/api/v1/me", headers=own).status_code == 200
+    keyed = {**own, "Idempotency-Key": str(uuid4())}
+    payload = {"amount_ml": "250.125", "consumed_at": "2026-03-08T06:00:00Z"}
 
     def fail_commit(session):
         raise OperationalError("private-statement", {}, Exception("private-value"))
@@ -35,11 +38,8 @@ def test_failed_commit_does_not_report_success_or_persist(authenticated_client, 
     try:
         response = api.post(
             "/api/v1/water-logs",
-            headers=own,
-            json={
-                "amount_ml": "250.125",
-                "consumed_at": "2026-03-08T06:00:00Z",
-            },
+            headers=keyed,
+            json=payload,
         )
     finally:
         event.remove(Session, "before_commit", fail_commit)
@@ -48,6 +48,14 @@ def test_failed_commit_does_not_report_success_or_persist(authenticated_client, 
     assert "private" not in response.text and response.headers["x-request-id"]
     with Session(pg_engine) as session:
         assert session.scalar(select(func.count()).select_from(WaterLog)) == 0
+        assert session.scalar(select(func.count()).select_from(RequestReceipt)) == 0
+    retry = api.post("/api/v1/water-logs", headers=keyed, json=payload)
+    assert retry.status_code == 201
+    replay = api.post("/api/v1/water-logs", headers=keyed, json=payload)
+    assert replay.status_code == 201 and replay.json()["id"] == retry.json()["id"]
+    with Session(pg_engine) as session:
+        assert session.scalar(select(func.count()).select_from(WaterLog)) == 1
+        assert session.scalar(select(func.count()).select_from(RequestReceipt)) == 1
 
 
 def test_activity_reconciliation_offline_retry_and_isolation(authenticated_client, pg_engine):
@@ -138,7 +146,16 @@ def test_sleep_import_mapping_and_nested_workout_parent_isolation(authenticated_
             "/api/v1/workout-sessions", headers=auth, json={"started_at": "2026-01-01T00:00:00Z"}
         ).json()["id"]
 
-    first, second, foreign = workout(own), workout(own), workout(other)
+    # A completed owned parent still exercises nested-resource isolation while
+    # respecting the one-active-workout rule for new starts.
+    second = workout(own)
+    completed = api.post(
+        f"/api/v1/workout-sessions/{second}/complete",
+        headers=own,
+        json={"completed_at": "2026-01-01T01:00:00Z"},
+    )
+    assert completed.status_code == 200
+    first, foreign = workout(own), workout(other)
     recorded = api.post(
         f"/api/v1/workout-sessions/{first}/sets",
         headers=own,

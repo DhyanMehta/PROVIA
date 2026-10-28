@@ -1,5 +1,10 @@
 # Frontend API integration
 
+Use the [Phase 4 frontend handoff](frontend-api-handoff.md) and
+[generated endpoint inventory](backend-endpoint-inventory.md) for current business
+APIs, first-party sessions, confirmation fields and retry headers. Notes below are
+historical Day 3 context, not the frozen current contract.
+
 > Historical Day3 contract notes. Authentication is superseded by the
 > [first-party authentication report](first-party-auth-completion-report.md).
 > Current tokens use mandatory issuer/audience and persisted revocation checks;

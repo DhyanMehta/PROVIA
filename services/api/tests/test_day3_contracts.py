@@ -27,7 +27,16 @@ def test_contracts_match_artifact_and_all_owned_routes_require_bearer(applicatio
         "/api/v1/nutrition/calculate-maintenance",
         "/api/v1/nutrition/calculate-goals",
     }
-    assert len(schema["paths"]) == 60
+    assert len(schema["paths"]) == 67
+    assert {
+        "/api/v1/onboarding",
+        "/api/v1/weight-logs/latest",
+        "/api/v1/weight-logs/{weight_id}",
+        "/api/v1/foods/barcode/{barcode}",
+        "/api/v1/foods/{food_id}/nutrition",
+        "/api/v1/workout-sessions/active",
+        "/api/v1/activity",
+    } <= schema["paths"].keys()
     assert schema["components"]["securitySchemes"]["HTTPBearer"] == {
         "type": "http",
         "scheme": "bearer",

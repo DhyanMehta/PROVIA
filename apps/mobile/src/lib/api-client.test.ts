@@ -8,6 +8,45 @@ const response = (status: number, data: unknown = {}) =>
     headers: new Headers({ "x-request-id": "safe-request-id" }),
   }) as Response;
 
+test("typed deletion accepts 204 without attempting to consume JSON", async () => {
+  const reply = response(204);
+  const readBody = jest.fn().mockRejectedValue(new Error("204 has no JSON body"));
+  reply.json = readBody;
+  const api = createApiClient(base, async () => "private-token", async () => reply);
+  const result: undefined = await api.request("delete", "/api/v1/water-logs/{log_id}", {
+    params: { log_id: "00000000-0000-4000-8000-000000000001" },
+  });
+  expect(result).toBeUndefined();
+  expect(readBody).not.toHaveBeenCalled();
+});
+
+test("explicit write retry preserves its caller-owned idempotency key", async () => {
+  const transport = jest.fn().mockResolvedValue(response(201, { id: "same-log" }));
+  const api = createApiClient(base, async () => "private-token", transport);
+  const options = {
+    idempotencyKey: "00000000-0000-4000-8000-000000000001",
+    body: { amount_ml: "250", consumed_at: "2026-01-01T12:00:00Z" },
+  };
+  await api.request("post", "/api/v1/water-logs", options);
+  expect(transport).toHaveBeenCalledTimes(1);
+  await api.request("post", "/api/v1/water-logs", options);
+  expect(transport).toHaveBeenCalledTimes(2);
+  for (const [, init] of transport.mock.calls) {
+    expect(init.headers["Idempotency-Key"]).toBe(options.idempotencyKey);
+    expect(init.body).toBe(JSON.stringify(options.body));
+  }
+});
+
+test("keyed uncertain write still does not retry automatically", async () => {
+  const transport = jest.fn().mockRejectedValue(new TypeError("network failure"));
+  const api = createApiClient(base, async () => "private-token", transport);
+  await expect(api.request("post", "/api/v1/water-logs", {
+    idempotencyKey: "00000000-0000-4000-8000-000000000001",
+    body: { amount_ml: "250", consumed_at: "2026-01-01T12:00:00Z" },
+  })).rejects.toMatchObject({ uncertainWrite: true });
+  expect(transport).toHaveBeenCalledTimes(1);
+});
+
 test.each([
   [401, "INVALID_AUTHENTICATION", true],
   [403, "ACCOUNT_DISABLED", true],

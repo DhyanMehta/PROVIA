@@ -28,7 +28,7 @@ class NutritionRepository:
             .options(selectinload(Food.portions))
         ).all()
 
-    def local_search(self, user_id, query, source=None):
+    def local_search(self, user_id, query, source=None, limit=20, offset=0):
         statement = select(Food).where(
             self.visible(user_id),
             or_(
@@ -40,7 +40,31 @@ class NutritionRepository:
             statement = statement.where(Food.source == source)
         priority = case((Food.source == "indian_curated", 0), (Food.source == "custom", 1), else_=2)
         return self.session.scalars(
-            statement.order_by(priority, Food.name, Food.id).limit(20)
+            statement.order_by(priority, Food.name, Food.id)
+            .limit(limit)
+            .offset(offset)
+            .options(selectinload(Food.portions))
+        ).all()
+
+    def barcode(self, user_id, barcode):
+        return self.session.scalar(
+            select(Food)
+            .where(
+                self.visible(user_id),
+                Food.source == "open_food_facts",
+                Food.source_food_id == barcode,
+            )
+            .options(selectinload(Food.portions))
+        )
+
+    def recipes(self, user_id, limit, offset):
+        return self.session.scalars(
+            select(Recipe)
+            .where(Recipe.user_id == user_id)
+            .order_by(Recipe.created_at.desc(), Recipe.id)
+            .limit(limit)
+            .offset(offset)
+            .options(selectinload(Recipe.ingredients))
         ).all()
 
     def import_foods(self, foods):

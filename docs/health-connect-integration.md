@@ -1,5 +1,8 @@
 # Android Health Connect backend integration
 
+Phase 4 contract review: 28 October 2026. Backend source readiness is separate from
+native Android integration and deployed/device acceptance, which remain unverified.
+
 Health Connect access runs on the Android device. PROVIA's Python API stores
 authenticated client submissions; it has no server-side Health Connect connection
 and cannot attest that a submitted total came from a sensor. Device verification is
@@ -8,7 +11,9 @@ PENDING. Backend boundary tests use representative payloads and real PostgreSQL.
 ## Client acquisition
 
 Request only needed read permissions: READ_STEPS for StepsRecord, READ_DISTANCE for
-distance, READ_ACTIVE_CALORIES_BURNED for active calories, and READ_SLEEP for sleep.
+distance, READ_ACTIVE_CALORIES_BURNED for active calories, READ_SLEEP for sleep,
+and READ_WEIGHT for WeightRecord when the user elects weight import. See the official
+[data-type/permission reference](https://developer.android.com/health-and-fitness/health-connect/data-types).
 Check permission availability/grants before each sync. History/background access
 requires the corresponding platform support and permission; don't assume all history
 is readable. Review [Health Connect permissions](https://developer.android.com/health-and-fitness/health-connect/get-started)
@@ -75,7 +80,13 @@ a partially read day as complete. Optional fields omitted from a PUT become null
 they do not preserve previous metrics. Permission loss or failed reading is unknown,
 not zero: stop the upload and keep existing server data pending explicit reconciliation.
 
-There is no activity-row deletion API or server deletion tombstone. Source-specific
+GET `/api/v1/activity` retrieves paginated stored snapshots using inclusive
+`start_date`/`end_date` local dates and `limit`/`offset`. Missing dates remain absent.
+DELETE `/api/v1/activity/daily?date=YYYY-MM-DD` removes the authenticated user's
+snapshot and returns 204 even if it was already absent. Stop/cancel obsolete queued
+PUTs before deletion: no server tombstone prevents an old upload recreating the day.
+
+There is no server deletion tombstone. Source-specific
 audit/reconstruction, automatic deletion notifications, permission-revocation erasure,
 restore of an earlier manual value and multi-device conflict-free merging are not
 implemented. Deleting all underlying steps can be reflected as zero only after a
@@ -102,6 +113,54 @@ metric. Summaries use local wake-up date. Overlapping records from different ori
 need client-side selection/reconciliation before upload. Offline conflicting PATCHes
 have no record-version compare-and-swap; serialize them on the authoritative client.
 
+## Weight records
+
+POST `/api/v1/weight-logs` accepts this sanitized example:
+
+```json
+{
+  "weight_kg": "70.125",
+  "recorded_at": "2026-10-24T08:00:00+05:30",
+  "source": "health_connect",
+  "external_id": "example-health-connect-record-id"
+}
+```
+
+Use Health Connect `metadata.id` as the stable `external_id` (1–200 characters).
+The uniqueness boundary is authenticated user/source/external ID. Omit source for
+manual measurements; a manual measurement must not supply an external ID. All API
+weights are kilograms, independent of the profile's kg/lb display preference.
+Timestamps require an explicit offset and cannot be in the future. Exact imported
+POST replay returns the original record; changed weight/time returns 409
+SOURCE_RECORD_CONFLICT. Keep an account-scoped external-ID-to-PROVIA-ID mapping and
+PATCH `/weight-logs/{id}` to correct weight/time. Source/external ID are immutable.
+
+GET `/weight-logs/{id}`, GET `/weight-logs/latest`, date-filtered paginated GET
+`/weight-logs` and DELETE `/weight-logs/{id}` use normal ownership checks. Foreign
+IDs return 404. Latest returns 404 if no measurement exists. Deleting/correcting a
+measurement does not alter profile current weight or a previously calculated goal.
+Goal changes require the separate preview/confirmation or explicit goal API.
+
+Weight and sleep creation also accept an optional UUID `Idempotency-Key`. Persist
+one key/body per queued create operation before uploading. Matching retries return
+the current resource; changed bodies conflict. A keyed retry after deletion returns
+409 IDEMPOTENCY_RESOURCE_DELETED. Without a retained key, external import IDs have
+no tombstones: an obsolete POST can recreate a deleted weight/sleep record. Cancel
+queued writes and serialize imports, corrections and deletion on one authoritative
+client. There is no server optimistic-version merge protocol.
+
+## Consent and account boundaries
+
+Read only data types the user has granted and elected to synchronize. Keep source
+metadata and pending operation mappings in the current first-party account's local
+namespace. Never upload a previous user's queue under a new account. Bearer identity,
+not any client user ID or contact email, determines ownership. The source label is
+provenance supplied by the authorized client, not cryptographic sensor attestation.
+On permission loss or partial/failed reading, stop reads and uploads for that type;
+do not fabricate zero measurements or infer deletion. Server erasure of previously
+synced data requires explicit product consent/retention policy and owned deletions.
+No automatic account-erasure or permission-revocation purge is claimed here.
+
 ## Real-device checklist — not executed
 
 - Verify supported Android/Health Connect versions, installation and permission UX.
@@ -112,6 +171,6 @@ have no record-version compare-and-swap; serialize them on the authoritative cli
   recomputation with lower/zero totals and stale-upload rejection.
 - Exercise paged changes, expired checkpoints, permission loss and partial read failure.
 - Verify sleep IDs, edits/deletes, overlapping origins and supported stage mappings.
-- Switch Clerk accounts with queued data; confirm no cross-account upload or local leak.
+- Switch first-party accounts with queued data; confirm no cross-account upload or local leak.
 - Confirm revoked permissions stop reads and apply the product's explicit data policy.
 - Record device/SDK versions and outcomes without credentials or raw personal records.

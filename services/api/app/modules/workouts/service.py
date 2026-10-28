@@ -66,6 +66,10 @@ class WorkoutService:
 
     def start(self, user_id, data):
         self.repository.lock_user(user_id)
+        if self.repository.active_session(user_id) is not None:
+            raise AppError(
+                "ACTIVE_WORKOUT_EXISTS", "Complete or cancel the active workout first", 409
+            )
         snapshot = None
         if data.workout_plan_day_id:
             plan, day = self.repository.plan_for_day(user_id, data.workout_plan_day_id)
@@ -81,8 +85,12 @@ class WorkoutService:
             WorkoutSession(user_id=user_id, plan_snapshot=snapshot, **data.model_dump())
         )
 
-    def mutable_session(self, user_id, row_id):
+    def mutable_session(self, user_id, row_id, set_id=None):
         row = self.repository.owned(WorkoutSession, user_id, row_id, lock=True)
+        # Resolve nested ownership before exposing lifecycle state. A set under
+        # another parent is always missing, even when this parent is completed.
+        if set_id is not None and not any(item.id == set_id for item in row.sets):
+            raise AppError("RESOURCE_NOT_FOUND", "Set was not found", 404)
         if row.status != "in_progress":
             raise AppError(
                 "INVALID_SESSION_STATE", "Only in-progress workouts can be modified", 409
@@ -97,8 +105,8 @@ class WorkoutService:
 
     def complete(self, user_id, row_id, data):
         row = self.mutable_session(user_id, row_id)
-        if data.completed_at < row.started_at:
-            raise AppError("INVALID_INTERVAL", "Completion precedes workout start", 422)
+        if data.completed_at <= row.started_at:
+            raise AppError("INVALID_INTERVAL", "Completion must follow workout start", 422)
         if any(not (item.is_completed or item.is_skipped) for item in row.sets):
             raise AppError("UNFINISHED_SETS", "Complete or skip every recorded set first", 409)
         row.status = "completed"
@@ -108,7 +116,7 @@ class WorkoutService:
     def set(self, user_id, session_id, data, set_id=None):
         # Match lock order used by plan/exercise mutations, then lock the session.
         self.repository.lock_user(user_id)
-        workout = self.mutable_session(user_id, session_id)
+        workout = self.mutable_session(user_id, session_id, set_id=set_id)
         if set_id:
             row = next((row for row in workout.sets if row.id == set_id), None)
             if row is None:
@@ -133,7 +141,7 @@ class WorkoutService:
         return self.repository.save(row)
 
     def delete_set(self, user_id, session_id, set_id):
-        workout = self.mutable_session(user_id, session_id)
+        workout = self.mutable_session(user_id, session_id, set_id=set_id)
         row = next((row for row in workout.sets if row.id == set_id), None)
         if row is None:
             raise AppError("RESOURCE_NOT_FOUND", "Set was not found", 404)

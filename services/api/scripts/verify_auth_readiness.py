@@ -55,9 +55,9 @@ def check(settings, database=None):
         with db.engine.connect() as connection:
             revision, present = database_state(connection)
         report["database_schema"] = {
-            "status": "PASS" if revision == "0006" and present else "BLOCKED",
-            "expected_revision": "0006",
-            "revision_matches": revision == "0006",
+            "status": "PASS" if revision == "0007" and present else "BLOCKED",
+            "expected_revision": "0007",
+            "revision_matches": revision == "0007",
             "auth_tables_present": present,
         }
     except Exception:

@@ -17,6 +17,27 @@ def test_console_redaction_handles_literal_and_repr_escaped_credentials():
     assert "safe diagnostic" in sanitized
 
 
+def test_generated_bearer_and_jwt_are_redacted_without_configured_secret_values():
+    token = "eyJhbGciOiJIUzI1NiJ9.synthetic_payload.synthetic_signature"
+    sanitized = redact("Authorization: Bearer " + token + " bare=" + token, [])
+    assert token not in sanitized and "synthetic_payload" not in sanitized
+    assert "Bearer [redacted]" in sanitized and "[redacted-jwt]" in sanitized
+
+
+def test_junit_redacts_generated_tokens_without_changing_failure_outcomes(tmp_path):
+    token = "eyJhbGciOiJIUzI1NiJ9.synthetic_payload.synthetic_signature"
+    path = tmp_path / "generated.xml"
+    root = ElementTree.Element("testsuite", tests="1", failures="1")
+    case = ElementTree.SubElement(root, "testcase", name="synthetic failure")
+    failure = ElementTree.SubElement(case, "failure", message="Bearer " + token)
+    failure.text = "Raw generated token=" + token
+    ElementTree.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+    sanitize_junit(["--junitxml=" + str(path)], [])
+    content = path.read_text(encoding="utf-8")
+    assert token not in content
+    assert ElementTree.parse(path).getroot().attrib == {"tests": "1", "failures": "1"}
+
+
 @pytest.mark.parametrize("joined", [False, True])
 def test_junit_redacts_xml_escaped_credentials_without_changing_outcomes(tmp_path, joined):
     secret = "test-only<&>credential"

@@ -20,6 +20,7 @@ class WeightGoalPreview(GoalCalculationOut):
 
 class WeightGoalConfirmation(Input):
     expected_goal_id: UUID
+    expected_weight_kg: Weight
 
 
 class ProfilePut(Input):
@@ -53,6 +54,17 @@ class ProfileOut(ProfilePut, Output):
     user_id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class OnboardingOut(Output):
+    authenticated: bool = True
+    email_verified: bool
+    profile_exists: bool
+    onboarding_complete: bool
+    active_goal_exists: bool
+    next_step: Literal["verify_email", "profile", "goal", "dashboard"]
+    profile: ProfileOut | None
+    active_goal: "GoalOut | None"
 
 
 class GoalCreate(Input):
@@ -131,6 +143,14 @@ class GoalOut(Output):
 class WeightCreate(Input):
     weight_kg: Weight
     recorded_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+    source: Literal["manual", "health_connect"] = "manual"
+    external_id: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+
+    @model_validator(mode="after")
+    def source_identity(self):
+        if (self.source == "health_connect") != (self.external_id is not None):
+            raise ValueError("Only Health Connect records require an external record ID")
+        return self
 
     @field_validator("recorded_at")
     @classmethod
@@ -140,9 +160,32 @@ class WeightCreate(Input):
         return value.astimezone(UTC)
 
 
+class WeightPatch(Input):
+    weight_kg: Weight | None = None
+    recorded_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def required_if_supplied(self):
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set
+        ):
+            raise ValueError("Supply at least one non-null measurement field")
+        return self
+
+    @field_validator("recorded_at")
+    @classmethod
+    def utc_timestamp(cls, value):
+        return WeightCreate.utc_timestamp(value) if value is not None else None
+
+
 class WeightOut(Output):
     id: UUID
     user_id: UUID
     weight_kg: Decimal
     recorded_at: datetime
     created_at: datetime
+    source: Literal["manual", "health_connect"]
+    external_id: str | None
+
+
+OnboardingOut.model_rebuild()

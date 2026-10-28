@@ -38,13 +38,22 @@ def test_current_schema_does_not_mistake_db_connectivity_for_auth_readiness(monk
 
 def test_configured_schema_still_requires_external_acceptance(monkeypatch):
     db, _ = database()
-    monkeypatch.setattr(readiness, "database_state", lambda connection: ("0006", True))
+    monkeypatch.setattr(readiness, "database_state", lambda connection: ("0007", True))
     result = readiness.check(configured(), db)
     assert result["configuration_and_schema_ready"] is True
     assert result["real_email_delivery"] == "NOT VERIFIED"
     assert result["deployed_and_device_acceptance"] == "NOT VERIFIED"
     encoded = json.dumps(result)
     assert "test-only" not in encoded and "sender@example.com" not in encoded
+
+
+def test_previous_auth_schema_is_not_current_mvp_schema(monkeypatch):
+    db, _ = database()
+    monkeypatch.setattr(readiness, "database_state", lambda connection: ("0006", True))
+    result = readiness.check(configured(), db)
+    assert result["database_schema"]["status"] == "BLOCKED"
+    assert result["database_schema"]["auth_tables_present"] is True
+    assert result["database_schema"]["expected_revision"] == "0007"
 
 
 def test_connection_failure_and_missing_configuration_are_sanitized(monkeypatch):

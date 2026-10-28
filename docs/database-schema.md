@@ -1,4 +1,10 @@
 # Database schema
+
+Phase 4 code head is `0007`, with 28 tables. The existing application database is
+still `0004`; no live migration is implied. `0005` adds five first-party auth tables,
+`0006` the encrypted outbox, and `0007` retry receipts plus weight provenance.
+See [current architecture](backend-final-architecture.md) and the migration sources.
+The detailed column inventory below records the historical `0004` application schema.
 Revision: `0004` (after `0003`, `0002` and `0001_initial`). PostgreSQL only. 21 application tables; UUID primary keys and timezone-aware timestamps. Numeric/Decimal is used for physical measurements and nutrition. Application-created timestamps and transaction timezone are UTC.
 ## Integrity and lifecycle
 - Owned records refer to users; child records inherit ownership through their parent.

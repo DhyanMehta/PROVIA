@@ -5,6 +5,7 @@ from app.db.models import FitnessGoal, WeightLog
 from app.modules.nutrition.targets import calculate_targets
 from app.modules.profiles.repository import ProfileRepository
 from app.modules.profiles.schemas import GoalPatch
+from app.modules.tracking.service import date_range
 
 
 class ProfileService:
@@ -49,8 +50,40 @@ class ProfileService:
     def goals(self, user_id, limit, offset):
         return self.repository.goals(user_id, limit, offset)
 
-    def weights(self, user_id, limit, offset):
-        return self.repository.weights(user_id, limit, offset)
+    def onboarding(self, principal):
+        user_id = principal.user.id
+        profile = self.repository.profile(user_id)
+        goal = self.repository.active_goal(user_id)
+        verified = (
+            principal.account.email_verified_at is not None and principal.account.status == "active"
+        )
+        complete = verified and profile is not None and goal is not None
+        step = (
+            "verify_email"
+            if not verified
+            else "profile"
+            if profile is None
+            else "goal"
+            if goal is None
+            else "dashboard"
+        )
+        return {
+            "authenticated": True,
+            "email_verified": verified,
+            "profile_exists": profile is not None,
+            "active_goal_exists": goal is not None,
+            "onboarding_complete": complete,
+            "next_step": step,
+            "profile": profile,
+            "active_goal": goal,
+        }
+
+    def weights(self, user_id, limit, offset, start=None, end=None):
+        begin = finish = None
+        if start is not None or end is not None:
+            profile = self.repository.profile(user_id)
+            _, _, begin, finish = date_range(start, end, profile.timezone if profile else "UTC")
+        return self.repository.weights(user_id, limit, offset, begin, finish)
 
     def create_goal(self, user_id, data):
         self.repository.lock_user(user_id)
@@ -86,7 +119,7 @@ class ProfileService:
             raise AppError("RESOURCE_NOT_FOUND", "Goal was not found", 404)
         values = data.model_dump(exclude_unset=True)
         inputs = {"current_weight_kg", "target_weight_kg", "selected_deficit_kcal"}
-        if inputs.intersection(values):
+        if (inputs | {"daily_steps_target", "goal_type"}).intersection(values):
             weight = values.get("current_weight_kg", goal.current_weight_kg_snapshot)
             target = values.get("target_weight_kg", goal.target_weight_kg)
             deficit = values.get("selected_deficit_kcal", goal.selected_deficit_kcal)
@@ -136,7 +169,37 @@ class ProfileService:
         return saved
 
     def add_weight(self, user_id, data):
+        if data.source == "health_connect":
+            self.repository.lock_user(user_id)
+            existing = self.repository.external_weight(user_id, data.source, data.external_id)
+            if existing is not None:
+                if existing.weight_kg != data.weight_kg or existing.recorded_at != data.recorded_at:
+                    raise AppError(
+                        "SOURCE_RECORD_CONFLICT", "Update the existing imported measurement", 409
+                    )
+                return existing
         return self.repository.save(WeightLog(user_id=user_id, **data.model_dump()))
+
+    def weight(self, user_id, weight_id, lock=False):
+        row = self.repository.weight(user_id, weight_id, lock=lock)
+        if row is None:
+            raise AppError("RESOURCE_NOT_FOUND", "Weight log was not found", 404)
+        return row
+
+    def patch_weight(self, user_id, weight_id, data):
+        row = self.weight(user_id, weight_id, lock=True)
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(row, key, value)
+        return self.repository.save(row)
+
+    def delete_weight(self, user_id, weight_id):
+        self.repository.delete(self.weight(user_id, weight_id, lock=True))
+
+    def latest_weight(self, user_id):
+        rows = self.repository.weights(user_id, 1, 0)
+        if not rows:
+            raise AppError("RESOURCE_NOT_FOUND", "Weight log was not found", 404)
+        return rows[0]
 
     def save_goal(self, goal):
         saved = self.repository.save(goal)
@@ -163,8 +226,13 @@ class ProfileService:
         )
         return {**values, "base_goal_id": goal.id, "weight_log_id": weight.id}
 
-    def apply_weight(self, user_id, weight_id, expected_goal_id):
+    def apply_weight(self, user_id, weight_id, expected_goal_id, expected_weight_kg):
         self.repository.lock_user(user_id)
+        weight = self.weight(user_id, weight_id, lock=True)
+        if weight.weight_kg != expected_weight_kg:
+            raise AppError(
+                "WEIGHT_CHANGED", "The measurement changed; preview again before confirming", 409
+            )
         preview = self.weight_preview(user_id, weight_id)
         if preview["base_goal_id"] != expected_goal_id:
             raise AppError(

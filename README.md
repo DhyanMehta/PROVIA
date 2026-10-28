@@ -3,9 +3,13 @@
 Current authentication is first-party email/password with Argon2id, short-lived
 access JWTs and rotating server-backed refresh sessions. The mobile app includes
 authentication, existing onboarding/dashboard, account/session controls and fitness
-foundation screens. See the [first-party auth report and cutover runbook](docs/first-party-auth-completion-report.md)
-for the current contract, verification, deployment steps and unresolved release gates.
-Migration 0005 is prepared; it has **not** been applied to the existing application DB.
+foundation screens. Use the [Phase 4 frontend handoff](docs/frontend-api-handoff.md),
+[feature matrix](docs/backend-final-feature-matrix.md),
+[architecture](docs/backend-final-architecture.md) and
+[final verification](docs/backend-final-test-report.md) for the current source contract.
+The [Phase 3 runbook](docs/phase3-deployment-runbook.md) and Phase 4 architecture describe
+separate deployment approvals. Migrations 0005–0007 are prepared; the existing
+application database remains at **0004** and has not received these migrations.
 Render deployment, an updated APK, real email delivery and device login remain pending.
 
 The Day 1–3 and sprint reports below record earlier milestones. Their Clerk setup
@@ -106,6 +110,10 @@ variables take precedence. Cached settings require a restart after changes.
 | AUTH_ACCESS_SECONDS, AUTH_REFRESH_DAYS | 900seconds /30days by default |
 | AUTH_TRUSTED_PROXY_CIDRS | Empty until exact immediate proxy networks are verified |
 | AUTH_EMAIL_PROVIDER | resend for Render Free; smtp where permitted |
+| AUTH_EMAIL_ENCRYPTION_KEYS | Server-only JSON Fernet key ring; never publish or reuse signing material |
+| AUTH_EMAIL_REQUESTS_ENABLED | true locally; prepared Render blueprint false until approved intake |
+| AUTH_EMAIL_WORKER_ENABLED | false; real mail configuration and separate activation approval required |
+| AUTH_EMAIL_POLL_SECONDS | 2, range1–60; assess free compute and sleep limitations |
 | RESEND_API_KEY, RESEND_FROM | Optional HTTPS email key and permitted sender |
 | SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM | Optional verified-TLS SMTP adapter |
 | NUTRITION_MIN_DAILY_CALORIES | 1500; configurable product safeguard, not clinical validation |
@@ -288,7 +296,8 @@ backend has not been demonstrated production-ready.
 
 ## Final Day1 hardening
 
-[Final review](docs/day1-final-review.md) contains the latest test counts and blockers.
+[Day1 review](docs/day1-final-review.md) records that milestone's results and blockers.
+Current totals and remaining gates are in the [Phase4 test report](docs/backend-final-test-report.md).
 See [API contracts](docs/api-endpoints.md) for historical targets, weight-log preview /
 confirmation, recipes and provider retry behavior. The finalized goal formulas are
 unchanged. [Catalog templates and import rules](services/api/data/README.md) include

@@ -1,18 +1,21 @@
 from datetime import date
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Path, Query, Request, Response
 
 from app.core.auth import CurrentUser
 from app.db.dependencies import DbSession
 from app.modules.common import Limit, Offset, Page
+from app.modules.idempotency import IdempotencyKey, create_once
 from app.modules.nutrition.repository import NutritionRepository
 from app.modules.nutrition.schemas import (
     DailyOut,
     DashboardOut,
     FoodCreate,
     FoodOut,
+    FoodQuantityOut,
     GoalCalculationInput,
     GoalCalculationOut,
     MaintenanceInput,
@@ -30,9 +33,30 @@ from app.modules.nutrition.targets import METHOD, calculate_targets, maintenance
 router = APIRouter(tags=["nutrition"])
 
 
+@router.get("/recipes", response_model=Page[RecipeOut])
+def recipes(user: CurrentUser, session: DbSession, limit: Limit = 20, offset: Offset = 0):
+    return {
+        "items": NutritionService(NutritionRepository(session)).recipes(user.id, limit, offset),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @router.post("/recipes", response_model=RecipeOut, status_code=201)
-def create_recipe(data: RecipeCreate, user: CurrentUser, session: DbSession):
-    return NutritionService(NutritionRepository(session)).create_recipe(user.id, data)
+def create_recipe(
+    data: RecipeCreate, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
+    repository = NutritionRepository(session)
+    service = NutritionService(repository)
+    return create_once(
+        repository,
+        user.id,
+        "recipe",
+        key,
+        data,
+        lambda: service.create_recipe(user.id, data),
+        lambda resource_id: service.get_recipe(user.id, resource_id),
+    )
 
 
 @router.get("/recipes/{recipe_id}", response_model=RecipeOut)
@@ -66,18 +90,60 @@ def search(
     session: DbSession,
     q: Annotated[str, Query(min_length=1, max_length=100)],
     source: Literal["all", "local", "indian_curated", "usda", "open_food_facts"] = "all",
+    page: Annotated[int, Query(ge=1, le=1000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
+    """Paginate each selected source independently; results are deduplicated by UUID."""
     providers = request.app.state.food_providers
     if source != "all":
         providers = {source: providers[source]} if source in providers else {}
     return NutritionService(NutritionRepository(session)).search(
-        user.id, q, providers, local_source="indian_curated" if source == "indian_curated" else None
+        user.id,
+        q,
+        providers,
+        local_source=source if source in {"indian_curated", "usda", "open_food_facts"} else None,
+        page=page,
+        page_size=page_size,
     )
 
 
 @router.post("/foods/custom", response_model=FoodOut, status_code=201)
-def custom_food(data: FoodCreate, user: CurrentUser, session: DbSession):
-    return NutritionService(NutritionRepository(session)).custom_food(user.id, data)
+def custom_food(
+    data: FoodCreate, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
+    repository = NutritionRepository(session)
+    service = NutritionService(repository)
+    return create_once(
+        repository,
+        user.id,
+        "custom-food",
+        key,
+        data,
+        lambda: service.custom_food(user.id, data),
+        lambda resource_id: service.food(user.id, resource_id),
+    )
+
+
+@router.get("/foods/barcode/{barcode}", response_model=FoodOut)
+def barcode_food(
+    barcode: Annotated[str, Path(pattern=r"^[0-9]{8,14}$")],
+    request: Request,
+    user: CurrentUser,
+    session: DbSession,
+):
+    return NutritionService(NutritionRepository(session)).barcode(
+        user.id, barcode, request.app.state.food_providers.get("open_food_facts")
+    )
+
+
+@router.get("/foods/{food_id}/nutrition", response_model=FoodQuantityOut)
+def food_quantity(
+    food_id: UUID,
+    quantity_g: Annotated[Decimal, Query(gt=0, le=100000, decimal_places=3)],
+    user: CurrentUser,
+    session: DbSession,
+):
+    return NutritionService(NutritionRepository(session)).quantity(user.id, food_id, quantity_g)
 
 
 @router.get("/foods/{food_id}", response_model=FoodOut)
@@ -86,9 +152,21 @@ def food(food_id: UUID, user: CurrentUser, session: DbSession):
 
 
 @router.post("/meals", response_model=MealOut, status_code=201)
-def create_meal(data: MealCreate, user: CurrentUser, session: DbSession):
-    service = NutritionService(NutritionRepository(session))
-    return service.output(service.create_meal(user.id, data))
+def create_meal(
+    data: MealCreate, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
+    repository = NutritionRepository(session)
+    service = NutritionService(repository)
+    meal = create_once(
+        repository,
+        user.id,
+        "meal",
+        key,
+        data,
+        lambda: service.create_meal(user.id, data),
+        lambda resource_id: repository.meal(user.id, resource_id),
+    )
+    return service.output(meal)
 
 
 @router.get("/meals", response_model=Page[MealOut])
@@ -98,11 +176,14 @@ def meals(
     date: date | None = None,
     limit: Limit = 20,
     offset: Offset = 0,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ):
     service = NutritionService(NutritionRepository(session))
     return {
         "items": [
-            service.output(meal) for meal in service.list_meals(user.id, date, limit, offset)
+            service.output(meal)
+            for meal in service.list_meals(user.id, date, limit, offset, start_date, end_date)
         ],
         "limit": limit,
         "offset": offset,

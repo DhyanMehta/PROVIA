@@ -24,7 +24,9 @@ type Success<O> = O extends { responses: infer R }
         ? R[K] extends { content: { "application/json": infer T } }
           ? T
           : never
-        : never;
+        : K extends 204
+          ? undefined
+          : never;
     }[keyof R]
   : never;
 type Token = (
@@ -149,6 +151,7 @@ export function createApiClient(
       timeoutMs?: number;
       refresh?: boolean;
       params?: Record<string, string>;
+      idempotencyKey?: string;
       validate?: (data: Success<Operation<P, M>>) => boolean;
     } = {},
   ): Promise<Success<Operation<P, M>>> {
@@ -233,6 +236,9 @@ export function createApiClient(
                 Accept: "application/json",
                 ...(options.body ? { "Content-Type": "application/json" } : {}),
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(options.idempotencyKey
+                  ? { "Idempotency-Key": options.idempotencyKey }
+                  : {}),
               },
               ...(options.body ? { body: JSON.stringify(options.body) } : {}),
             },

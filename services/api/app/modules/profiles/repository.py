@@ -56,10 +56,24 @@ class ProfileRepository:
             now = latest + timedelta(microseconds=1)
         self.save(GoalTransition(user_id=user_id, goal_id=goal_id, effective_at=now))
 
-    def weight(self, user_id, weight_id):
+    def weight(self, user_id, weight_id, lock=False):
+        query = select(WeightLog).where(WeightLog.user_id == user_id, WeightLog.id == weight_id)
+        if lock:
+            query = query.with_for_update().execution_options(populate_existing=True)
+        return self.session.scalar(query)
+
+    def external_weight(self, user_id, source, external_id):
         return self.session.scalar(
-            select(WeightLog).where(WeightLog.user_id == user_id, WeightLog.id == weight_id)
+            select(WeightLog).where(
+                WeightLog.user_id == user_id,
+                WeightLog.source == source,
+                WeightLog.external_id == external_id,
+            )
         )
+
+    def delete(self, row):
+        self.session.delete(row)
+        self.session.flush()
 
     def goals(self, user_id: UUID, limit: int, offset: int):
         return self.session.scalars(
@@ -70,13 +84,12 @@ class ProfileRepository:
             .offset(offset)
         ).all()
 
-    def weights(self, user_id: UUID, limit: int, offset: int):
+    def weights(self, user_id: UUID, limit: int, offset: int, begin=None, finish=None):
+        query = select(WeightLog).where(WeightLog.user_id == user_id)
+        if begin is not None:
+            query = query.where(WeightLog.recorded_at >= begin, WeightLog.recorded_at < finish)
         return self.session.scalars(
-            select(WeightLog)
-            .where(WeightLog.user_id == user_id)
-            .order_by(WeightLog.recorded_at.desc(), WeightLog.id)
-            .limit(limit)
-            .offset(offset)
+            query.order_by(WeightLog.recorded_at.desc(), WeightLog.id).limit(limit).offset(offset)
         ).all()
 
     def save(self, value):

@@ -232,6 +232,7 @@ def test_daily_timezone_and_totals():
         user_id,
         datetime(2025, 12, 31, 18, 30, tzinfo=UTC),
         datetime(2026, 1, 1, 18, 30, tzinfo=UTC),
+        limit=101,
     )
     assert summary["totals"]["calories_kcal"] == 0
     start, end = day_bounds(date(2026, 3, 8), "America/New_York")

@@ -138,10 +138,32 @@ class WeightLog(Identity, Created, Base):
     __table_args__ = (
         CheckConstraint("weight_kg > 0 AND weight_kg <= 1000", name="weight_range"),
         Index("ix_weight_logs_user_recorded", "user_id", "recorded_at"),
+        CheckConstraint("source IN ('manual','health_connect')", name="source"),
+        CheckConstraint(
+            "(source = 'manual' AND external_id IS NULL) OR "
+            "(source = 'health_connect' AND external_id IS NOT NULL)",
+            name="source_identity",
+        ),
+        UniqueConstraint("user_id", "source", "external_id"),
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     weight_kg: Mapped[Decimal] = mapped_column(Numeric(8, 3))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(50), default="manual", server_default="manual")
+    external_id: Mapped[str | None] = mapped_column(String(200))
+
+
+class RequestReceipt(Created, Base):
+    """Durable mobile retry receipts; intentionally retain IDs after resource deletion."""
+
+    __tablename__ = "request_receipts"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    operation: Mapped[str] = mapped_column(String(40), primary_key=True)
+    key: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    resource_id: Mapped[uuid.UUID] = mapped_column(Uuid)
 
 
 class GoalTransition(Identity, Created, Base):

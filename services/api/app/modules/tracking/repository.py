@@ -51,6 +51,19 @@ class TrackingRepository:
             )
         )
 
+    def activities(self, user_id, start, end, limit, offset):
+        return self.session.scalars(
+            select(DailyActivity)
+            .where(
+                DailyActivity.user_id == user_id,
+                DailyActivity.activity_date >= start,
+                DailyActivity.activity_date <= end,
+            )
+            .order_by(DailyActivity.activity_date, DailyActivity.id)
+            .limit(limit)
+            .offset(offset)
+        ).all()
+
     def target(self, user_id, day):
         return self.session.scalar(
             select(WaterTarget)

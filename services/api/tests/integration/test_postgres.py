@@ -23,7 +23,7 @@ def test_migration_roundtrip_and_no_drift(pg_engine):
     with pg_engine.begin() as connection:
         tables = inspect(connection).get_table_names()
         assert set(Base.metadata.tables) <= set(tables)
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007"
         for name, table in Base.metadata.tables.items():
             assert len(inspect(connection).get_foreign_keys(name)) == len(table.foreign_keys)
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
@@ -44,13 +44,13 @@ def test_auth_upgrade_preserves_legacy_identity_and_fitness_records(pg_engine):
     with Session(pg_engine) as db, db.begin():
         db.add(User(id=user_id, auth_provider_subject="legacy-preserved", email="old@example.com"))
         db.flush()
-        db.add(
-            WeightLog(
-                id=weight_id,
-                user_id=user_id,
-                weight_kg=Decimal("97"),
-                recorded_at=datetime.now(UTC),
-            )
+        # Exercise the actual 0004 columns, before new model fields exist.
+        db.execute(
+            text(
+                "INSERT INTO weight_logs (id,user_id,weight_kg,recorded_at) "
+                "VALUES (:id,:user_id,97,:recorded_at)"
+            ),
+            {"id": weight_id, "user_id": user_id, "recorded_at": datetime.now(UTC)},
         )
     with pg_engine.begin() as connection:
         config.attributes["connection"] = connection
@@ -65,7 +65,11 @@ def test_auth_upgrade_preserves_legacy_identity_and_fitness_records(pg_engine):
         config.attributes["connection"] = connection
         command.downgrade(config, "0004")
     with Session(pg_engine) as db:
-        assert db.get(User, user_id) is not None and db.get(WeightLog, weight_id) is not None
+        assert db.get(User, user_id) is not None
+        assert (
+            db.scalar(text("SELECT id FROM weight_logs WHERE id=:id"), {"id": weight_id})
+            == weight_id
+        )
     with pg_engine.begin() as connection:
         config.attributes["connection"] = connection
         command.upgrade(config, "head")
@@ -654,16 +658,15 @@ def test_weight_log_preview_and_confirm(authenticated_client, pg_engine):
     assert Decimal(preview.json()["daily_calorie_target"]) == 1760
     assert Decimal(preview.json()["target_weight_kg"]) == 85
     assert api.post(path + "/goal-preview", headers=headers("other")).status_code == 404
-    confirmed = api.post(path + "/apply-goal", headers=own, json={"expected_goal_id": goal["id"]})
+    confirmation = {
+        "expected_goal_id": goal["id"],
+        "expected_weight_kg": preview.json()["current_weight_kg_snapshot"],
+    }
+    confirmed = api.post(path + "/apply-goal", headers=own, json=confirmation)
     assert confirmed.status_code == 201
     assert confirmed.json()["id"] != goal["id"]
     assert Decimal(confirmed.json()["daily_calorie_target"]) == 1760
-    assert (
-        api.post(
-            path + "/apply-goal", headers=own, json={"expected_goal_id": goal["id"]}
-        ).status_code
-        == 409
-    )
+    assert api.post(path + "/apply-goal", headers=own, json=confirmation).status_code == 409
     with Session(pg_engine) as session:
         assert session.scalar(select(func.count()).select_from(GoalTransition)) == 2
 

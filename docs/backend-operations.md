@@ -1,8 +1,9 @@
 # Backend operations
 
-Current authentication and revision0005 operations are documented in the
-[first-party cutover runbook](first-party-auth-completion-report.md). Earlier Clerk
-probe references in this document are historical; runtime no longer uses JWKS.
+Current source operations use the [Phase 3 cutover runbook](phase3-deployment-runbook.md)
+and [Phase 4 architecture](backend-final-architecture.md), including its additional
+`0007` approval gate. Application data remains at `0004`. Runtime no longer uses Clerk
+or JWKS. See [current frontend contracts](frontend-api-handoff.md).
 
 Run backend commands from `services/api`. Keep the existing Python3.12.15 environment,
 SQLAlchemy2.1.6 pure-Python build and uv.lock. Windows Application Control remains
@@ -32,7 +33,7 @@ PostgreSQL TLS must be explicitly configured and verified for that environment.
 - `/api/v1/health/ready`: legacy application-startup readiness, preserved unchanged.
 - `/api/v1/health/db`: database readiness using SELECT1; use this for deployment
   traffic-readiness checks. It returns503 safely when the DB is unavailable.
-- Optional food providers and Clerk JWKS need separate bounded probes. Provider failure
+- Optional food providers and email delivery need separate bounded probes. Provider failure
   must not remove process liveness. Do not place credentials in probe URLs or logs.
 
 All responses include server-generated X-Request-ID, nosniff and no-referrer headers.
@@ -51,27 +52,26 @@ read timeout, concurrent connections and distributed request budgets at the ingr
 
 Existing collection bounds remain: pagination100, plan7days/50exercises per day,
 workout500sets, sleep500stages, meals/recipes100items, analytics366days and10000rows
-per bounded query. Food searches cap query length100 and local results20. Individual
-daily nutrition summaries still load that day's meals/items; extreme per-user daily
-volumes are an outstanding performance limit to assess before public scale. Historical
+per bounded query. Food searches cap query length100 and each source page at100. Daily
+nutrition summaries reject more than100 meals with422 rather than publishing partial
+totals; paginated history remains available. Historical
 analytics uses bounded batched queries and tested query-count stability across ranges.
-No new indexes or schema changes are justified by the current workload evidence.
+Phase4 adds only the required retry receipts and weight provenance constraints.
 
-No distributed rate limiter was added. Before public deployment, configure a trusted
-gateway policy for authentication failures and expensive endpoints, with shared
-state, verified proxy addresses, bounded Retry-After, alerting and measured budgets.
+Existing authentication throttles use persisted database buckets. Before public
+deployment, configure an approved ingress policy for general expensive endpoints,
+verified proxy addresses, bounded Retry-After, alerting and measured budgets.
 Do not substitute a per-process in-memory limiter for distributed protection. TLS/HSTS,
 network access, backups, restore drills, retention/erasure and abuse monitoring remain
 deployment responsibilities; this completion does not certify production launch.
 
-Authentication uses only configured HTTPS JWKS, RS256 and issuer; ignores token jku
-URLs; requires exp/iss/sub; validates optional nbf/iat and configured aud/azp. Numeric
-dates must be finite JSON numbers, not strings/bools; optional sid/sts must be nonempty
-strings. Missing optional Clerk claims are not newly required. Pending sessions are403.
-JWKS set TTL300s, unknown-key refresh cooldown30s and HTTP timeout5s are retained.
-Connection failures now impose a5s per-process retry cooldown. Rotation can temporarily
-reject a new key during cooldown; no indefinite per-key cache is enabled. Stateless
-verification does not immediately revoke issued JWTs when a session ends.
+First-party authentication pins HS256, configured issuer/audience, integer JWT dates,
+access type and UUID identity/session/token IDs. Every protected request also checks
+persisted account status and session revocation/expiry. Pending verification permits
+account/onboarding inspection but returns403 for fitness data. No JWKS or Clerk
+authorized-party setting participates in this runtime. Passwords use Argon2id;
+refresh/action values are stored as digests. Use the current key-rotation/outbox
+runbook; pause and drain registration intents before signer rotation.
 
 ## Logs and troubleshooting
 
@@ -83,10 +83,10 @@ Transport debug and Uvicorn access logs are disabled because URLs can contain se
 Keep proxy/server logging equally restrictive. A request ID is in the response header,
 not a new error-body field. Database failures retain DATABASE_UNAVAILABLE/CONFLICT.
 
--401: check issuer/audience/azp, expiry and device clock using safe local tooling;
+-401: check first-party issuer/audience, expiry, session state and device clock;
   never paste tokens into online JWT decoders or tickets.
--503 AUTH_UNAVAILABLE: check configured JWKS HTTPS endpoint,5s timeout/cooldown and
-  provider availability. Do not bypass signature checks.
+-503 AUTH_UNAVAILABLE: check server-only signer and token configuration without
+  printing key material. Do not bypass signature or persisted session checks.
 -503 DATABASE_UNAVAILABLE: check network/TLS/pool capacity and direct versus pooled
   config without outputting URLs; use health/db and request IDs.
 -409 sync errors: reconcile current state; retry the same acknowledged snapshot only.

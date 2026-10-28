@@ -136,8 +136,9 @@ def test_outbox_migration_roundtrip_preserves_identity_auth_and_fitness(queue):
         command.downgrade(config, "0005")
         assert "auth_email_jobs" not in inspect(connection).get_table_names()
         command.upgrade(config, "0006")
-        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+        command.upgrade(config, "head")
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
     job_id = enqueue(queue, "verify_email", "old@example.com", now)
     with queue.sessions() as db:
         assert db.get(AuthEmailJob, job_id).payload_ciphertext
@@ -145,6 +146,8 @@ def test_outbox_migration_roundtrip_preserves_identity_auth_and_fitness(queue):
         config.attributes["connection"] = connection
         command.downgrade(config, "0005")
         command.upgrade(config, "0006")
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+        command.upgrade(config, "head")
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
     with queue.sessions() as db:
         assert db.get(User, user_id).auth_provider_subject == "legacy-outbox"

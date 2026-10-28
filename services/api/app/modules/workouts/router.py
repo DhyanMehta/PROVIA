@@ -7,8 +7,9 @@ from fastapi import APIRouter, Query, Response
 from app.core.auth import CurrentUser
 from app.db.dependencies import DbSession
 from app.db.models import WorkoutPlan, WorkoutSession
-from app.modules.common import Limit, Offset, Page
-from app.modules.tracking.service import TrackingService
+from app.modules.common import Input, Limit, Offset, Page
+from app.modules.idempotency import IdempotencyKey, create_once
+from app.modules.tracking.service import date_range
 from app.modules.workouts import schemas as s
 from app.modules.workouts.repository import WorkoutRepository
 from app.modules.workouts.service import WorkoutService
@@ -37,8 +38,19 @@ def exercises(
 
 
 @router.post("/exercises/custom", response_model=s.ExerciseOut, status_code=201)
-def create_exercise(data: s.ExerciseCreate, user: CurrentUser, session: DbSession):
-    return WorkoutService(WorkoutRepository(session)).create_exercise(user.id, data)
+def create_exercise(
+    data: s.ExerciseCreate, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
+    repository = WorkoutRepository(session)
+    return create_once(
+        repository,
+        user.id,
+        "custom-exercise",
+        key,
+        data,
+        lambda: WorkoutService(repository).create_exercise(user.id, data),
+        lambda row_id: repository.exercise(user.id, row_id, allow_archived=True),
+    )
 
 
 @router.get("/exercises/{exercise_id}", response_model=s.ExerciseOut)
@@ -58,8 +70,19 @@ def delete_exercise(exercise_id: UUID, user: CurrentUser, session: DbSession):
 
 
 @router.post("/workout-plans", response_model=s.PlanOut, status_code=201)
-def create_plan(data: s.PlanCreate, user: CurrentUser, session: DbSession):
-    return WorkoutService(WorkoutRepository(session)).plan(user.id, data)
+def create_plan(
+    data: s.PlanCreate, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
+    repository = WorkoutRepository(session)
+    return create_once(
+        repository,
+        user.id,
+        "workout-plan",
+        key,
+        data,
+        lambda: WorkoutService(repository).plan(user.id, data),
+        lambda row_id: repository.owned(WorkoutPlan, user.id, row_id),
+    )
 
 
 @router.get("/workout-plans", response_model=Page[s.PlanOut])
@@ -88,22 +111,52 @@ def delete_plan(plan_id: UUID, user: CurrentUser, session: DbSession):
 
 
 @router.post("/workout-plans/{plan_id}/duplicate", response_model=s.PlanOut, status_code=201)
-def duplicate_plan(plan_id: UUID, user: CurrentUser, session: DbSession):
+def duplicate_plan(
+    plan_id: UUID, user: CurrentUser, session: DbSession, key: IdempotencyKey = None
+):
     repository = WorkoutRepository(session)
-    repository.lock_user(user.id)
-    original = repository.owned(WorkoutPlan, user.id, plan_id)
-    data = s.PlanOut.model_validate(original).model_dump(exclude={"id"})
-    data["is_active"] = False
-    for day in data["days"]:
-        day.pop("id")
-        for exercise in day["exercises"]:
-            exercise.pop("id")
-    return WorkoutService(repository).plan(user.id, s.PlanCreate.model_validate(data))
+
+    def copy():
+        repository.lock_user(user.id)
+        original = repository.owned(WorkoutPlan, user.id, plan_id)
+        data = s.PlanOut.model_validate(original).model_dump(exclude={"id"})
+        data["is_active"] = False
+        for day in data["days"]:
+            day.pop("id")
+            for exercise in day["exercises"]:
+                exercise.pop("id")
+        return WorkoutService(repository).plan(user.id, s.PlanCreate.model_validate(data))
+
+    return create_once(
+        repository,
+        user.id,
+        "duplicate-plan",
+        key,
+        Input(),
+        copy,
+        lambda row_id: repository.owned(WorkoutPlan, user.id, row_id),
+        context=str(plan_id),
+    )
 
 
 @router.post("/workout-sessions", response_model=s.SessionOut, status_code=201)
-def start(data: s.SessionCreate, user: CurrentUser, session: DbSession):
-    return WorkoutService(WorkoutRepository(session)).start(user.id, data)
+def start(
+    data: s.SessionCreate,
+    user: CurrentUser,
+    session: DbSession,
+    idempotency_key: IdempotencyKey = None,
+):
+    """Start one active workout. Retry with the same optional UUID Idempotency-Key."""
+    repository = WorkoutRepository(session)
+    return create_once(
+        repository,
+        user.id,
+        "workout-session",
+        idempotency_key,
+        data,
+        lambda: WorkoutService(repository).start(user.id, data),
+        lambda row_id: repository.owned(WorkoutSession, user.id, row_id),
+    )
 
 
 @router.get("/workout-sessions", response_model=Page[s.SessionOut])
@@ -112,16 +165,23 @@ def sessions(
     session: DbSession,
     start_date: date | None = None,
     end_date: date | None = None,
+    status: s.SessionStatus | None = None,
     limit: Limit = 20,
     offset: Offset = 0,
 ):
+    repository = WorkoutRepository(session)
+    _, _, begin, finish = date_range(start_date, end_date, repository.timezone(user.id))
     return {
-        "items": TrackingService(WorkoutRepository(session)).logs(
-            WorkoutSession, WorkoutSession.started_at, user.id, start_date, end_date, limit, offset
-        ),
+        "items": repository.sessions(user.id, begin, finish, status, limit, offset),
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/workout-sessions/active", response_model=s.SessionOut | None)
+def active_session(user: CurrentUser, session: DbSession):
+    """Return the newest in-progress workout, regardless of start date, or null."""
+    return WorkoutRepository(session).active_session(user.id)
 
 
 @router.get("/workout-sessions/{session_id}", response_model=s.SessionOut)
