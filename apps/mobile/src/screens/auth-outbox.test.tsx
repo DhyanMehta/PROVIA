@@ -61,7 +61,7 @@ test("registration acceptance opens verification without claiming setup or deliv
   await fireEvent.changeText(screen.getByLabelText("Password"), "  a long password  ");
   await fireEvent.changeText(screen.getByLabelText("Confirm password"), "  a long password  ");
   await fireEvent.press(screen.getByText("Create account"));
-  expect(require("expo-router").router.replace).toHaveBeenCalledWith("/verify-email");
+  expect(require("expo-router").router.replace).toHaveBeenCalledWith({ pathname: "/verify-email", params: { email: "new@example.com" } });
   expect(screen.getByText(/does not confirm that your account is ready/)).toBeTruthy();
   const body = JSON.parse(transport.mock.calls[0][1].body);
   expect(body).toEqual({ name: "New User", email: "new@example.com", password: "  a long password  " });

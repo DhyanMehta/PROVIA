@@ -1,5 +1,5 @@
 import { Redirect, router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Action,
   Card,
@@ -22,10 +22,12 @@ function messageResponse(value: unknown): boolean {
 }
 
 function useWork() {
+  const running = useRef(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   async function run(action: () => Promise<void>) {
-    if (busy) return;
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setError("");
     try {
@@ -33,6 +35,7 @@ function useWork() {
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
+      running.current = false;
       setBusy(false);
     }
   }
@@ -222,7 +225,7 @@ export function Register() {
               body: { name: name.trim(), email: email.trim(), password },
               validate: messageResponse,
             });
-            router.replace("/verify-email");
+            router.replace({ pathname: "/verify-email", params: { email: email.trim() } });
           });
         }}
       />
@@ -261,7 +264,8 @@ export function VerifyEmail() {
 
 function VerificationForm({ token }: { token: string }) {
   const { session, user } = useAuth();
-  const [email, setEmail] = useState(user?.email ?? ""),
+  const params = useLocalSearchParams<{ email?: string }>();
+  const [email, setEmail] = useState(user?.email ?? (typeof params.email === "string" ? params.email : "")),
     [message, setMessage] = useState(""),
     [cooldown, setCooldown] = useState(0);
   const work = useWork();

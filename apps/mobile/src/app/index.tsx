@@ -19,7 +19,7 @@ function ResolveAccount() {
   if (data)
     return (
       <Redirect
-        href={data.profile && data.active ? "/dashboard" : "/onboarding"}
+        href={data.authority.next_step === "dashboard" ? "/dashboard" : data.authority.next_step === "verify_email" ? "/verify-email" : "/onboarding"}
       />
     );
   return (
@@ -35,15 +35,10 @@ function ResolveAccount() {
         <>
           <Busy label="Connecting to your account…" />
           <Copy>
-            {step === "session"
-              ? "Verifying session · GET /me"
-              : step === "profile"
-                ? "Loading profile · GET /profile"
-                : "Loading plan · GET /goals"}
+            {step === "session" ? "Checking your session…" : "Finding your next step…"}
           </Copy>
           <Copy>
-            A free backend can take around a minute to wake up. Your saved data
-            stays in Neon.
+            Connecting can take up to a minute when the service is waking up.
           </Copy>
         </>
       )}

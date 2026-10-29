@@ -1,12 +1,13 @@
 import { router } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Action,
   Busy,
   Card,
   Copy,
   ErrorNote,
-  Field,
+  PasswordField,
+  ConfirmDialog,
   Page,
   Title,
   Value,
@@ -24,14 +25,17 @@ export default function Account() {
     [confirm, setConfirm] = useState(""),
     [busy, setBusy] = useState(false),
     [failure, setFailure] = useState("");
+  const running = useRef(false);
+  const [confirmation, setConfirmation] = useState<{ title: string; message: string; action: () => Promise<void> }>();
   const load = useCallback(
     (signal: AbortSignal) =>
-      api.request("get", "/api/v1/auth/sessions", { signal }),
+      api.request("get", "/api/v1/auth/sessions", { signal, cacheMs: 0, validate: value => Array.isArray(value) && value.length <= 100 && value.every(row => !!row && typeof row.id === "string" && typeof row.current === "boolean" && (row.device_label === null || typeof row.device_label === "string") && [row.created_at, row.last_used_at, row.expires_at].every(item => typeof item === "string" && Number.isFinite(Date.parse(item)))) }),
     [api],
   );
   const { data, error, reload } = useResource(load);
   async function run(action: () => Promise<void>) {
-    if (busy) return;
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setFailure("");
     try {
@@ -39,7 +43,9 @@ export default function Account() {
     } catch (e) {
       setFailure(errorMessage(e));
     } finally {
+      running.current = false;
       setBusy(false);
+      setConfirmation(undefined);
     }
   }
   return (
@@ -65,7 +71,7 @@ export default function Account() {
         <Copy>
           Changing your password signs out every session, including this device.
         </Copy>
-        <Field
+        <PasswordField
           label="Current password"
           value={password}
           onChangeText={setPassword}
@@ -74,7 +80,7 @@ export default function Account() {
           autoCorrect={false}
           maxLength={128}
         />
-        <Field
+        <PasswordField
           label="New password"
           value={next}
           onChangeText={setNext}
@@ -83,7 +89,7 @@ export default function Account() {
           autoCorrect={false}
           maxLength={128}
         />
-        <Field
+        <PasswordField
           label="Confirm new password"
           value={confirm}
           onChangeText={setConfirm}
@@ -95,15 +101,13 @@ export default function Account() {
         <Action
           label="Change password"
           disabled={busy || next.length < 15 || next !== confirm || !password}
-          onPress={() =>
-            void run(async () => {
+          onPress={() => setConfirmation({ title: "Change your password?", message: "Every active session, including this device, will be signed out after a successful change.", action: async () => {
               await api.request("post", "/api/v1/auth/change-password", {
                 body: { password, new_password: next },
               });
               await session.clear();
               router.replace("/welcome");
-            })
-          }
+            } })}
         />
       </Card>
       <Card>
@@ -126,8 +130,7 @@ export default function Account() {
               secondary
               label="Revoke session"
               disabled={busy}
-              onPress={() =>
-                void run(async () => {
+              onPress={() => setConfirmation({ title: "Revoke this session?", message: row.current ? "This signs out the current session." : "This ends the selected server session. Its device label is user supplied.", action: async () => {
                   await api.request(
                     "delete",
                     "/api/v1/auth/sessions/{session_id}",
@@ -135,8 +138,7 @@ export default function Account() {
                   );
                   if (row.current) await session.clear();
                   else reload();
-                })
-              }
+                } })}
             />
           </Card>
         ))}
@@ -147,19 +149,18 @@ export default function Account() {
         secondary
         label="Sign out this device"
         disabled={busy}
-        onPress={() => void run(signOut)}
+        onPress={() => setConfirmation({ title: "Sign out this device?", message: "Your saved account records stay on the server.", action: signOut })}
       />
       <Action
         secondary
         label="Sign out all devices"
         disabled={busy}
-        onPress={() =>
-          void run(async () => {
+        onPress={() => setConfirmation({ title: "Sign out all devices?", message: "This revokes every active session. You will need to sign in again.", action: async () => {
             await api.request("post", "/api/v1/auth/logout-all");
             await session.clear();
-          })
-        }
+          } })}
       />
+      {confirmation ? <ConfirmDialog visible title={confirmation.title} message={confirmation.message} destructive busy={busy} onCancel={() => setConfirmation(undefined)} onConfirm={() => { void run(async () => { await confirmation.action(); setConfirmation(undefined); }); }} /> : null}
     </Page>
   );
 }

@@ -1,118 +1,31 @@
 import { useAuth } from "../providers/auth";
 import { router } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Platform } from "react-native";
-import {
-  Action,
-  Busy,
-  Card,
-  Copy,
-  ErrorNote,
-  Page,
-  Title,
-  Value,
-} from "../components/ui";
+import { Action, Busy, Card, ConfirmDialog, Copy, ErrorNote, Page, SectionHeader, Title, Value } from "../components/ui";
 import { useResource } from "../hooks/use-resource";
+import { useMutation } from "../hooks/use-mutation";
 import { loadSetup } from "../lib/onboarding";
-import { ApiError, errorMessage } from "../lib/api-client";
+import { errorMessage } from "../lib/api-client";
 import { metric } from "../lib/format";
+import { kgToLb } from "../lib/form-values";
 import { useApi } from "../providers/api";
-import { profileSummary } from "../lib/fitness-contracts";
+import { friendly, goalData } from "../lib/profile-values";
+import type { Schema } from "../lib/contracts";
+import { GoalEditor, MutationError, ProfileEditor } from "./profile-forms";
 
 export default function Profile() {
-  const api = useApi();
-  const { signOut } = useAuth();
-  const load = useCallback(
-    async (signal: AbortSignal) => {
-      const data = await loadSetup(api, signal);
-      if (!profileSummary(data))
-        throw new ApiError("Invalid profile summary.", 200, "INVALID_RESPONSE");
-      return data;
-    },
-    [api],
-  );
-  const { data, error, reload } = useResource(load);
-  const [failure, setFailure] = useState("");
-  async function exit() {
-    try {
-      await signOut();
-    } catch {
-      setFailure("Sign-out did not complete. Please try again.");
-    }
-  }
-  function confirmExit() {
-    if (Platform.OS === "web") void exit();
-    else
-      Alert.alert(
-        "Sign out of PROVIA?",
-        "Your saved profile and goals stay in your account.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Sign out",
-            style: "destructive",
-            onPress: () => void exit(),
-          },
-        ],
-      );
-  }
-  return (
-    <Page>
-      <Title eyebrow="Your account">Built around you.</Title>
-      {!data && !error && <Busy />}
-      {!!error && (
-        <>
-          <ErrorNote message={errorMessage(error)} />
-          {data && (
-            <Copy>Showing previously fetched profile and goal values.</Copy>
-          )}
-          <Action label="Retry" onPress={reload} />
-        </>
-      )}
-      {data && (
-        <>
-          <Card>
-            <Value
-              label="Name"
-              value={data.profile?.display_name ?? "Profile not set"}
-            />
-            <Value
-              label="Height"
-              value={metric(data.profile?.height_cm, "cm")}
-            />
-            <Value
-              label="Profile weight"
-              value={metric(data.profile?.current_weight_kg, "kg")}
-            />
-            <Copy>{data.profile?.timezone ?? "UTC"}</Copy>
-          </Card>
-          <Card>
-            <Value
-              label="Goal weight"
-              value={metric(data.active?.target_weight_kg, "kg")}
-            />
-            <Value
-              label="Daily calorie target"
-              value={metric(data.active?.daily_calorie_target, "kcal")}
-            />
-            <Copy>
-              Profile measurements and historical goal snapshots are separate. A
-              new goal only activates after you explicitly confirm it.
-            </Copy>
-          </Card>
-          <Action
-            label="Review or update my goal"
-            onPress={() => router.push("/onboarding")}
-          />
-        </>
-      )}
-      {failure && <ErrorNote message={failure} />}
-      <Action secondary label="Sign out" onPress={confirmExit} />
-      <Action
-        secondary
-        label="Account & sessions"
-        onPress={() => router.push("/account")}
-      />
-    </Page>
-  );
+  const api = useApi(), { user, signOut } = useAuth(), mutation = useMutation();
+  const [editing, setEditing] = useState(false), [goal, setGoal] = useState<Schema<"GoalOut">>(), [offset, setOffset] = useState(0), [confirm, setConfirm] = useState<{ title: string; message: string; action: () => Promise<void> }>();
+  const resource = useResource(useCallback(async (signal: AbortSignal) => { const setup = await loadSetup(api, signal); const history = await api.request("get", "/api/v1/goals", { signal, query: { limit: 20, offset }, validate: value => !!value && Array.isArray(value.items) && value.items.every(goalData) }); return { ...setup, history }; }, [api, offset]));
+  const data = resource.data;
+  const unit = data?.profile?.preferred_weight_unit ?? "kg";
+  const weightLabel = (value: string | null | undefined) => metric(value == null ? value : unit === "lb" ? kgToLb(value) : value, unit);
+  return <Page refreshing={resource.loading} onRefresh={resource.reload}><Title eyebrow="YOUR ACCOUNT">Built around you</Title>{!data && resource.loading ? <Busy /> : null}{resource.error ? <><ErrorNote message={errorMessage(resource.error)} /><Action label="Retry" onPress={resource.reload} />{data ? <Copy>Showing previously fetched values. Refresh before editing.</Copy> : null}</> : null}
+    {data ? <><Card><Value label="Display name" value={data.profile?.display_name ?? "Profile not set"} /><Value label="Authentication email" value={user?.email ?? "Not available"} /><Value label="Height" value={metric(data.profile?.height_cm, "cm")} /><Value label="Profile weight" value={weightLabel(data.profile?.current_weight_kg)} /><Copy>{data.profile?.timezone ?? "Time zone not set"} · Preferred unit {data.profile?.preferred_weight_unit ?? "kg"}</Copy><Copy>Date of birth: {data.profile?.date_of_birth ?? "Not provided"}. Activity: {data.profile ? friendly(data.profile.activity_level) : "Not set"}.</Copy>{data.profile ? <Action secondary label="Edit profile and preferences" disabled={editing || !!goal || !!resource.error} onPress={() => setEditing(true)} /> : <Action label="Complete your profile" onPress={() => router.push("/onboarding")} />}</Card>
+      {editing && data.profile ? <ProfileEditor profile={data.profile} active={data.active} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); resource.reload(); }} /> : null}
+      <Card><SectionHeader title="Active nutrition goal" /><Value label="Goal weight" value={weightLabel(data.active?.target_weight_kg)} /><Value label="Daily calorie target" value={metric(data.active?.daily_calorie_target, "kcal")} /><Copy>Profile weight, actual measurements and historical goal snapshots are separate. Changing a profile weight can create a calculated revision; logging a measurement alone does not.</Copy><Action label="Review or update my goal" onPress={() => router.push("/onboarding")} /></Card>
+      {goal ? <GoalEditor key={goal.id} goal={goal} unit={unit} onCancel={() => setGoal(undefined)} onSaved={saved => { setGoal(saved); resource.reload(); }} /> : null}
+      <SectionHeader title="Goal history" description="Saved revisions, newest first. Calculation edits preserve earlier snapshots." />{data.history.items.length === 0 ? <Copy>No goals saved.</Copy> : null}{data.history.items.map(row => <Card key={row.id}><Value label={friendly(row.goal_type)} value={row.status} /><Value label="Target weight" value={weightLabel(row.target_weight_kg)} /><Copy>Created {new Date(row.created_at).toLocaleDateString(undefined, { timeZone: data.profile?.timezone ?? "UTC" })}. {metric(row.daily_calorie_target, "kcal daily")}</Copy><Action secondary label="Review this goal" disabled={editing || !!goal || !!resource.error} onPress={() => setGoal(row)} />{(["active", "paused", "completed"] as const).filter(status => status !== row.status).map(status => <Action key={status} secondary label={`${status === "active" ? "Activate" : status === "paused" ? "Pause" : "Complete"} this goal`} disabled={editing || !!goal || mutation.pending || mutation.uncertain || !!resource.error} onPress={() => setConfirm({ title: `${friendly(status)} goal?`, message: status === "active" ? "Activating this saved goal can pause another active goal. Historical snapshots stay preserved." : "This changes the saved goal status after your confirmation.", action: async () => { const saved = await api.request("patch", "/api/v1/goals/{goal_id}", { params: { goal_id: row.id }, body: { status }, validate: goalData }); setGoal(saved); resource.reload(); } })} />)}</Card>)}<Action secondary label="Newer goal history" disabled={offset === 0 || resource.loading} onPress={() => setOffset(value => Math.max(0, value - 20))} /><Action secondary label="Older goal history" disabled={data.history.items.length < 20 || resource.loading} onPress={() => setOffset(value => value + 20)} />
+    </> : null}<MutationError mutation={mutation} onReconcile={async () => { await loadSetup(api); resource.reload(); }} /><Action secondary label="Account & sessions" onPress={() => router.push("/account")} /><Card><SectionHeader title="Data and account erasure" description="This backend does not provide a self-service account deletion endpoint. No deletion has been requested or performed. Contact the service operator for an authorized data request." /></Card><Action secondary label="Sign out" disabled={mutation.pending} onPress={() => setConfirm({ title: "Sign out of PROVIA?", message: "Your saved account data stays on the server. Unsaved local edits are discarded.", action: signOut })} />{confirm ? <ConfirmDialog visible title={confirm.title} message={confirm.message} destructive busy={mutation.pending} onCancel={() => setConfirm(undefined)} onConfirm={() => { void mutation.run(async () => { await confirm.action(); setConfirm(undefined); }).then(() => setConfirm(undefined)); }} /> : null}
+  </Page>;
 }

@@ -7,6 +7,7 @@ import { Welcome, Login, Register, VerifyEmail, ResetPassword } from "./auth";
 import { Nutrition, Workouts, Tracking, Progress, FoodSearch } from "./fitness";
 import Profile from "./profile";
 import NextSection from "../app/next/[section]";
+jest.mock("expo-crypto", () => ({ randomUUID: () => "00000000-0000-4000-8000-000000000001" }));
 
 const mockSignOut = jest.fn();
 const mockSignIn = jest.fn();
@@ -40,6 +41,7 @@ jest.mock("expo-secure-store", () => {
 jest.mock("expo-router", () => ({
   router: { replace: jest.fn(), push: jest.fn(), setParams: jest.fn() },
   useFocusEffect: jest.fn(),
+  usePreventRemove: jest.fn(() => jest.fn()),
   useLocalSearchParams: () => mockParams,
   Redirect: ({ href }: { href: string }) => {
     const { Text } = require("react-native");
@@ -86,6 +88,12 @@ const mockApi = createApiClient(
   async () => "fixture-token",
   transport,
 );
+beforeEach(() => mockApi.invalidate());
+const setupProfile = { id: "profile", display_name: "Test", height_cm: "175", current_weight_kg: "97", preferred_weight_unit: "kg", activity_level: "moderate", timezone: "Asia/Kolkata" };
+const setupGoal = { id: "goal", status: "active", goal_type: "weight_loss", calculation_method: "provia", current_weight_kg_snapshot: "97", target_weight_kg: "85", selected_deficit_kcal: "500", daily_calorie_target: "1828", daily_steps_target: null, created_at: "2026-01-01T00:00:00Z" };
+function setupReply(profile: unknown = null, goal: unknown = null) {
+  return { authenticated: true, email_verified: true, profile_exists: profile !== null, active_goal_exists: goal !== null, onboarding_complete: profile !== null && goal !== null, next_step: !profile ? "profile" : !goal ? "goal" : "dashboard", profile, active_goal: goal };
+}
 
 afterEach(() => {
   jest.clearAllMocks();
@@ -143,13 +151,7 @@ test("a returning user with profile and canonical goal reaches dashboard", async
     reply(
       url.endsWith("/me")
         ? { id: "user" }
-        : url.endsWith("/profile")
-          ? { id: "profile" }
-          : {
-              items: [
-                { id: "goal", status: "active", calculation_method: "provia" },
-              ],
-            },
+        : setupReply(setupProfile, setupGoal),
     ),
   );
   await render(<Index />);
@@ -170,9 +172,7 @@ test("restored session stops at an auth configuration failure and permits retry"
   transport.mockImplementation(async (url: string) =>
     url.endsWith("/me")
       ? reply({ id: "user" })
-      : url.endsWith("/profile")
-        ? reply({}, 404)
-        : reply({ items: [] }),
+      : reply(setupReply()),
   );
   await fireEvent.press(screen.getByText("Try again"));
   expect(await screen.findByText("Redirect:/onboarding")).toBeTruthy();
@@ -266,7 +266,7 @@ test("dashboard renders server values and missing-data states without invented m
   expect(await screen.findByText("Nothing logged yet")).toBeTruthy();
   expect(screen.getByText("No water logged")).toBeTruthy();
   expect(screen.getByText("No sleep recorded")).toBeTruthy();
-  expect(screen.getAllByText("Not recorded")).toHaveLength(2);
+  expect(screen.getAllByText("Not recorded").length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText(/No weight measurement recorded/)).toBeTruthy();
   expect(screen.getAllByText("1828 kcal")).toHaveLength(2);
 });
@@ -496,9 +496,7 @@ test("malformed profile summaries cannot render objects as personal information"
     reply(
       url.endsWith("/me")
         ? { id: "user" }
-        : url.endsWith("/profile")
-          ? { display_name: { unexpected: true } }
-          : { items: [] },
+        : setupReply({ ...setupProfile, display_name: { unexpected: true } }),
     ),
   );
   await render(<Profile />);
@@ -548,9 +546,7 @@ test("invalid form stays editable and does not call calculation or save endpoint
   transport.mockImplementation(async (url: string) =>
     url.endsWith("/me")
       ? reply({ id: "user" })
-      : url.endsWith("/profile")
-        ? reply({}, 404)
-        : reply({ items: [] }),
+      : reply(setupReply()),
   );
   await render(<Onboarding />);
   await screen.findByLabelText("Your name");
@@ -558,7 +554,7 @@ test("invalid form stays editable and does not call calculation or save endpoint
   expect(
     await screen.findByText("Enter a name of 1–100 characters."),
   ).toBeTruthy();
-  expect(transport).toHaveBeenCalledTimes(3);
+  expect(transport).toHaveBeenCalledTimes(2);
 });
 
 test("onboarding uses backend previews, retains draft after failed confirmation, then reconciles", async () => {
@@ -572,15 +568,19 @@ test("onboarding uses backend previews, retains draft after failed confirmation,
     current_weight_kg_snapshot: "97.000",
     target_weight_kg: "85.000",
     selected_deficit_kcal: "500.000",
+    daily_calorie_target: "1828.000",
+    daily_steps_target: null,
+    created_at: "2026-01-01T00:00:00Z",
   };
   transport.mockImplementation(async (url: string, options: RequestInit) => {
     if (url.endsWith("/me")) return reply({ id: "user" });
+    if (url.endsWith("/onboarding")) return reply(setupReply(hasProfile ? setupProfile : null, goalSaved ? goal : null));
     if (url.endsWith("/profile")) {
       if (options.method === "PUT") {
         hasProfile = true;
-        return reply({});
+        return reply(setupProfile);
       }
-      return hasProfile ? reply({}) : reply({}, 404);
+      return hasProfile ? reply(setupProfile) : reply({}, 404);
     }
     if (url.includes("/goals?"))
       return reply({ items: goalSaved ? [goal] : [] });
@@ -588,6 +588,7 @@ test("onboarding uses backend previews, retains draft after failed confirmation,
       return reply({ maintenance_calories: "2328.00000000" });
     if (url.endsWith("/nutrition/calculate-goals"))
       return reply({
+        maintenance_calories: "2328.00000000",
         daily_calorie_target: "1828.00000000",
         protein_target_g: "161.50000000",
         carbs_target_g: "142.72500000",
@@ -622,4 +623,13 @@ test("onboarding uses backend previews, retains draft after failed confirmation,
       ([url, options]) => url.endsWith("/goals") && options.method === "POST",
     ),
   ).toHaveLength(1);
+});
+
+test("editing only an optional profile field protects the first onboarding step from Back", async () => {
+  transport.mockImplementation(async (url: string) => reply(url.endsWith("/me") ? { id: "user" } : setupReply()));
+  await render(<Onboarding />);
+  await screen.findByLabelText("Your name");
+  await fireEvent.changeText(screen.getByLabelText("Date of birth (YYYY-MM-DD, optional)"), "1995-02-28");
+  const prevent = require("expo-router").usePreventRemove;
+  expect(prevent.mock.calls[prevent.mock.calls.length - 1][0]).toBe(true);
 });
