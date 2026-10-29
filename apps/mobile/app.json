@@ -43,7 +43,18 @@
             "minSdkVersion": 26
           }
         }
-      ]
+      ],
+      "expo-image",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow PROVIA to scan food barcodes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true

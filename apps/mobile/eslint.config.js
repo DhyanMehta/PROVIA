@@ -6,5 +6,5 @@ module.exports = defineConfig([
     files: ["**/*.test.tsx"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
-  { ignores: ["dist/*", "android/*", "ios/*"] },
+  { ignores: [".expo/**", "dist/**", "android/**", "ios/**"] },
 ]);
