@@ -1,0 +1,5 @@
+import { Action, Card, Field, NumberField } from "../../components/ui";
+import type { PortionDraft } from "./forms";
+export function PortionEditor({ value, onChange, disabled = false }: { value: PortionDraft[]; onChange: (value: PortionDraft[]) => void; disabled?: boolean }) {
+  return <>{value.map((row, index) => <Card key={index}><Field label={`Portion ${index + 1} name`} value={row.label} editable={!disabled} maxLength={100} onChangeText={label => onChange(value.map((item, at) => at === index ? { ...item, label } : item))} /><NumberField label={`Portion ${index + 1} measured grams`} value={row.grams} editable={!disabled} onChangeText={grams => onChange(value.map((item, at) => at === index ? { ...item, grams } : item))} /><Action label={`Remove portion ${index + 1}`} secondary disabled={disabled} onPress={() => onChange(value.filter((_, at) => at !== index))} /></Card>)}<Action label="Add measured portion" secondary disabled={disabled || value.length >= 30} onPress={() => onChange([...value, { label: "", grams: "" }])} /></>;
+}

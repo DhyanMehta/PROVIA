@@ -1,0 +1,30 @@
+import { aliasesInput, barcodeInput, customFoodInput, mealPatch, portionsInput, recipeInput } from "./forms";
+import { foodCheck, mealCheck, mealPageCheck, quantityCheck, recipeCheck, recipePageCheck, searchCheck } from "./contracts";
+import type { Schema } from "../../lib/contracts";
+const a = "10000000-0000-4000-8000-000000000001", b = "10000000-0000-4000-8000-000000000002";
+const values = { calories_kcal: "120.125", protein_g: "0", carbs_g: "", fat_g: "2.5", fiber_g: "" };
+const totals = { calories_kcal: "120.125", protein_g: "0", carbs_g: null, fat_g: "2.5", fiber_g: null };
+const food = { id: a, name: "Measured test food", brand: null, source: "custom", source_food_id: null, serving_basis: "100g", food_kind: "ingredient", portions: [], ...totals };
+const meal: Schema<"MealOut"> = { id: b, meal_type: "lunch", consumed_at: "2026-10-29T08:30:00+05:30", notes: "Old note", totals, items: [{ id: b, food_id: a, quantity_g: "10.000", calories_kcal_snapshot: "12.013", protein_g_snapshot: "0", carbs_g_snapshot: null, fat_g_snapshot: "0.25", fiber_g_snapshot: null }] };
+
+test("actual PostgreSQL zero and finite exponent nutrient strings remain valid records", () => {
+  expect(foodCheck({ ...food, protein_g: "0E-8", calories_kcal: "1.20125E+2" })).toBe(true);
+  expect(quantityCheck({ ...totals, food_id: a, quantity_g: "12.5", protein_g: "0E-8" })).toBe(true);
+  expect(mealCheck({ ...meal, items: [{ ...meal.items[0], protein_g_snapshot: "0E-8" }] })).toBe(true);
+  expect(foodCheck({ ...food, protein_g: "1E999" })).toBe(false);
+  expect(foodCheck({ ...food, protein_g: "Infinity" })).toBe(false);
+});
+test("custom food distinguishes blank unknown nutrients from measured zero", () => { const body = customFoodInput(" My food ", "", "ingredient", "first, first, second", values, []); expect(body).toMatchObject({ name: "My food", brand: null, protein_g: "0", carbs_g: null, fiber_g: null, aliases: ["first", "second"] }); });
+test.each(["-1", "NaN", "1e3", "0.0001", "1000000.001"])("reject invalid nutrient %s", text => { expect(() => customFoodInput("Food", "", "ingredient", "", { ...values, protein_g: text }, [])).toThrow(); });
+test("measured portions require both label and positive decimal grams", () => { expect(portionsInput([{ label: "", grams: "" }])).toEqual([]); expect(() => portionsInput([{ label: "bowl", grams: "" }])).toThrow(); expect(() => portionsInput([{ label: "bowl", grams: "0" }])).toThrow(); expect(portionsInput([{ label: "measured bowl", grams: "125.125" }])).toEqual([{ label: "measured bowl", grams: "125.125" }]); });
+test("duplicate portions and overlong aliases fail before network write", () => { expect(() => portionsInput([{ label: "bowl", grams: "10" }, { label: " bowl ", grams: "20" }])).toThrow(/unique/); expect(() => aliasesInput("x".repeat(101))).toThrow(); });
+test("recipe preserves exact measured ingredient grams and cooked yield", () => { expect(recipeInput("Recipe", "200.125", [{ food_id: a, name: "Food", quantity_g: "51.005" }], "", [])).toMatchObject({ yield_g: "200.125", ingredients: [{ food_id: a, quantity_g: "51.005" }] }); });
+test("recipe rejects empty, repeated ingredients and portions exceeding cooked yield", () => { expect(() => recipeInput("Recipe", "100", [], "", [])).toThrow(); const ingredient = { food_id: a, name: "Food", quantity_g: "10" }; expect(() => recipeInput("Recipe", "100", [ingredient, ingredient], "", [])).toThrow(/Combine/); expect(() => recipeInput("Recipe", "100", [ingredient], "", [{ label: "bowl", grams: "101" }])).toThrow(/yield/); });
+test("metadata-only meal edits omit items and preserve historical nutrient snapshots", () => { const patch = mealPatch(meal, "dinner", meal.consumed_at, "Changed note", [{ food_id: a, name: "Saved", quantity_g: "10" }]); expect(patch).toEqual({ meal_type: "dinner", consumed_at: meal.consumed_at, notes: "Changed note" }); });
+test("food quantity replacement sends the complete list only after explicit change", () => { const patch = mealPatch(meal, "lunch", meal.consumed_at, "", [{ food_id: a, name: "Saved", quantity_g: "10.001" }, { food_id: b, name: "Other", quantity_g: "20" }]); expect(patch.items).toEqual([{ food_id: a, quantity_g: "10.001" }, { food_id: b, quantity_g: "20" }]); expect(patch.notes).toBeNull(); expect(() => mealPatch(meal, "lunch", meal.consumed_at, "", [])).toThrow(); });
+test("meal timestamp must include an offset", () => { expect(() => mealPatch(meal, "lunch", "2026-10-29T08:30:00", "", [{ food_id: a, name: "Saved", quantity_g: "10" }])).toThrow(); });
+test.each(["１２３４５６７８", "1234567", "123456789012345", "https://example.test", "12 345678"])("reject unsupported barcode %s", value => { expect(() => barcodeInput(value)).toThrow(); });
+test("barcode accepts only bounded ASCII digits and preserves leading zeros", () => { expect(barcodeInput(" 0012345678901 ")).toBe("0012345678901"); });
+test("runtime food validators accept unknown nutrients and reject invalid identifiers and false zeros", () => { expect(foodCheck(food)).toBe(true); expect(foodCheck({ ...food, protein_g: undefined })).toBe(false); expect(foodCheck({ ...food, id: "provider-123" })).toBe(false); expect(quantityCheck({ ...totals, food_id: a, quantity_g: "12.5" })).toBe(true); });
+test("page validators follow actual generated pages without inventing a total field", () => { expect(mealCheck(meal)).toBe(true); expect(mealPageCheck({ items: [meal], limit: 20, offset: 0 })).toBe(true); expect(mealPageCheck({ items: [meal], limit: -1, offset: 0 })).toBe(false); expect(searchCheck({ items: [food], provider_status: { usda: "not_configured" }, page: 1, page_size: 20 })).toBe(true); });
+test("recipe validators propagate incomplete snapshots", () => { const recipe = { id: b, food, yield_g: "150.0", incomplete: true, ingredients: meal.items.map(({ food_id, quantity_g, ...rest }) => ({ food_id, quantity_g, ...rest })), created_at: "2026-10-29T00:00:00Z" }; expect(recipeCheck(recipe)).toBe(true); expect(recipePageCheck({ items: [recipe], limit: 20, offset: 0 })).toBe(true); expect(recipeCheck({ ...recipe, incomplete: "true" })).toBe(false); });
