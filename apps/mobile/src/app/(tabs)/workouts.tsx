@@ -1,1 +1,1 @@
-export { Workouts as default } from "../../screens/fitness";
+export { WorkoutsScreen as default } from "../../screens/workouts";

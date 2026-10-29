@@ -1,1 +1,1 @@
-export { Nutrition as default } from "../../screens/fitness";
+export { default } from "../../screens/nutrition";

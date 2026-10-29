@@ -1,1 +1,1 @@
-export { Progress as default } from "../../screens/fitness";
+export { default } from "../../screens/progress";

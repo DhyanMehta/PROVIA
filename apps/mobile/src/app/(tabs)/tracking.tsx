@@ -1,1 +1,1 @@
-export { Tracking as default } from "../../screens/fitness";
+export { TrackingScreen as default } from "../../screens/tracking";

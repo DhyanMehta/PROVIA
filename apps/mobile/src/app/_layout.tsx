@@ -4,9 +4,10 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "../providers/auth";
 import { ApiProvider } from "../providers/api";
 import { validatePublicConfig } from "../lib/config";
-import { Copy, Page, Title } from "../components/ui";
+import { Busy, Copy, Page, Title } from "../components/ui";
 import { SessionGate } from "../components/session-gate";
 import { useTheme } from "../theme";
+import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 
 function Navigation({ apiUrl }: { apiUrl: string }) {
   const { isLoaded, isSignedIn, userId, user } = useAuth();
@@ -38,6 +39,9 @@ function Navigation({ apiUrl }: { apiUrl: string }) {
               options={{ headerShown: false }}
             />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="nutrition" options={{ title: "Nutrition" }} />
+            <Stack.Screen name="workouts" options={{ title: "Workouts" }} />
+            <Stack.Screen name="tracking" options={{ title: "Tracking" }} />
             <Stack.Screen
               name="food-search"
               options={{ title: "Food search" }}
@@ -53,6 +57,8 @@ function Navigation({ apiUrl }: { apiUrl: string }) {
   );
 }
 export default function Layout() {
+  const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold });
+  if (!fontsLoaded && !fontError) return <SafeAreaProvider><Page safeTop><Busy label="Opening PROVIA…" /></Page></SafeAreaProvider>;
   let config;
   try {
     config = validatePublicConfig(process.env.EXPO_PUBLIC_API_URL, __DEV__);
