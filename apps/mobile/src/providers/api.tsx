@@ -1,6 +1,8 @@
 import { useAuth } from "./auth";
 import { fetch as expoFetch } from "expo/fetch";
-import { createContext, useContext, useLayoutEffect, useMemo } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo } from "react";
+import { AppState } from "react-native";
+import { ResourceScope } from "../lib/resource-scope";
 import type { PropsWithChildren } from "react";
 import {
   createApiClient,
@@ -36,7 +38,13 @@ export function ApiProvider({
       api.cancelAll();
     };
   }, [api]);
-  return <Context.Provider value={api}>{children}</Context.Provider>;
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") api.invalidate(); });
+    // Refresh mounted read models across profile-zone midnight, without polling writes.
+    const timer = setInterval(() => { if (AppState.currentState === "active") api.invalidate(); }, 60000);
+    return () => { subscription.remove(); clearInterval(timer); };
+  }, [api]);
+  return <Context.Provider value={api}><ResourceScope.Provider value={api}>{children}</ResourceScope.Provider></Context.Provider>;
 }
 export function useApi() {
   const api = useContext(Context);
