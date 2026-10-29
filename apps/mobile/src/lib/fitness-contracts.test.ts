@@ -40,6 +40,8 @@ test("dashboard boundaries retain zero, unknown and exact backend decimal string
 });
 
 test.each([
+  ["malformed present goal target", { ...day(), goal: { target_weight_kg: "private-invalid-value" } }],
+  ["wrong goal decimal representation", { ...day(), goal: { target_weight_kg: 85 } }],
   ["missing structure", {}],
   ["null response", null],
   [

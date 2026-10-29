@@ -48,6 +48,13 @@ export function safeServerCode(value: unknown, status: number) {
       "INVALID_ACTION",
       "RATE_LIMITED",
       "INVALID_AUTHENTICATION",
+      "ACTIVE_WORKOUT_EXISTS",
+      "INVALID_SESSION_STATE",
+      "REST_DAY",
+      "GOAL_CHANGED",
+      "WEIGHT_CHANGED",
+      "SOURCE_CONFLICT",
+      "IDEMPOTENCY_CONFLICT",
     ].includes(value)
     ? value
     : `HTTP_${status}`;

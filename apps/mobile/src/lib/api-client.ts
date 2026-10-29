@@ -139,6 +139,14 @@ export function createApiClient(
   onAuthRejected: (error: ApiError) => void = () => {},
 ) {
   const pending = new Set<AbortController>();
+  const listeners = new Set<() => void>();
+  const cache = new Map<string, { data: unknown; expires: number }>();
+  let revision = 0;
+  const invalidate = () => {
+    cache.clear();
+    revision += 1;
+    listeners.forEach((listener) => listener());
+  };
   let active = true;
   async function request<P extends keyof paths, M extends Method<P>>(
     method: M,
@@ -152,6 +160,7 @@ export function createApiClient(
       refresh?: boolean;
       params?: Record<string, string>;
       idempotencyKey?: string;
+      cacheMs?: number;
       validate?: (data: Success<Operation<P, M>>) => boolean;
     } = {},
   ): Promise<Success<Operation<P, M>>> {
@@ -174,6 +183,7 @@ export function createApiClient(
       options.timeoutMs ?? (method === "get" ? 90000 : 45000),
     );
     let sent = false;
+    const requestRevision = revision;
     try {
       if (!active || !isCurrentSession())
         throw new ApiError(
@@ -197,6 +207,12 @@ export function createApiClient(
         throw new ApiError("Sign in to continue.", 401, "SESSION_REQUIRED");
       if (controller.signal.aborted)
         throw new ApiError("Request cancelled or timed out.", 0, "ABORTED");
+      const cacheKey = JSON.stringify([path, options.params, options.query]);
+      const cached = cache.get(cacheKey);
+      if (method === "get" && options.cacheMs !== 0 && !options.refresh && options.authenticated !== false && cached && cached.expires > Date.now()) {
+        if (options.validate && !options.validate(cached.data as Success<Operation<P, M>>)) cache.delete(cacheKey);
+        else return cached.data as Success<Operation<P, M>>;
+      }
       sent = true;
       const query = options.query
         ? "?" +
@@ -272,6 +288,7 @@ export function createApiClient(
         break;
       }
       phase = "response";
+      if (!active || !isCurrentSession()) throw new ApiError("The account session changed.", 401, "SESSION_CHANGED");
       if (!response.ok) {
         const data = await abortable(response.json(), controller.signal).catch(
           (error) => {
@@ -283,9 +300,12 @@ export function createApiClient(
         rejectedByServer =
           response.status === 401 ||
           (response.status === 403 && code === "ACCOUNT_DISABLED");
-        throw new ApiError("Request failed.", response.status, code, requestId);
+        throw new ApiError("Request failed.", response.status, code, requestId, method !== "get" && (response.status >= 500 || response.status === 408));
       }
-      if (response.status === 204) return undefined as Success<Operation<P, M>>;
+      if (response.status === 204) {
+        if (method !== "get") invalidate();
+        return undefined as Success<Operation<P, M>>;
+      }
       try {
         const data: unknown = await abortable(
           response.json(),
@@ -298,6 +318,11 @@ export function createApiClient(
           !options.validate(data as Success<Operation<P, M>>)
         )
           throw new Error();
+        if (!active || !isCurrentSession()) throw new ApiError("The account session changed.", 401, "SESSION_CHANGED");
+        if (method === "get" && options.authenticated !== false && revision === requestRevision) {
+          if (cache.size >= 80) cache.delete(cache.keys().next().value!);
+          cache.set(cacheKey, { data, expires: Date.now() + (options.cacheMs ?? 30000) });
+        } else if (method !== "get" && options.authenticated !== false && !path.endsWith("/preview")) invalidate();
         return data as Success<Operation<P, M>>;
       } catch (error) {
         if (controller.signal.aborted) throw error;
@@ -337,6 +362,7 @@ export function createApiClient(
         phase,
         durationMs: Date.now() - started,
       };
+      if (failure.uncertainWrite && options.authenticated !== false) invalidate();
       if (
         active &&
         isCurrentSession() &&
@@ -353,11 +379,15 @@ export function createApiClient(
   }
   return {
     request,
+    invalidate,
+    getRevision: () => revision,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     resume: () => {
       active = true;
     },
     pause: () => {
       active = false;
+      cache.clear();
     },
     cancelAll: () => pending.forEach((controller) => controller.abort()),
   };

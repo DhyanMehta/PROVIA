@@ -64,6 +64,7 @@ const nutrition = shape({
 });
 
 export const dashboardData = shape({
+  goal: (value) => value === undefined || value === null || shape({ target_weight_kg: (target) => target === null || (typeof target === "string" && decimal(target) && Number(target) > 0 && Number(target) <= 1000) })(value),
   date,
   timezone: text,
   nutrition,
