@@ -3,10 +3,10 @@
 30 October 2026. Authentication gate BLOCKED; Health Connect implementation stopped
 before integration changes as explicitly required by Phase7 sections9/32.
 
-1. Phone incident identity and exact error remain unknown. User confirms registration
-   failed after a build/update on the phone. Need the installed EAS build ID/APK and
-   exact displayed error/time. The older downloaded Clerk APK is not proof of what
-   was installed during the incident.
+1. User now reports registration HTTP404, partial request ID `fc0e934f-...`, and source
+   through `fc5838`. This supports the first-party-client/older-deployment mismatch.
+   Exact EAS build/APK and full request ID/log correlation remain unverified. The
+   older downloaded Clerk APK is not proof of what was installed during the incident.
 2. Current hosted schema lacks first-party register/login/onboarding. Configured
    application database is0004, auth schema missing. Publishing/deploying source and
    application0005→0006→0007 migrations require separate approval and backup/restore
@@ -26,7 +26,12 @@ before integration changes as explicitly required by Phase7 sections9/32.
 
 ## Specific approvals/prerequisites to obtain next
 
-First identify the incident APK and authorize a dedicated test inbox. Review the
+Backup/restore preparation is now approved; see `phase7-backup-restore-preparation.md`.
+The existing PostgreSQL18.4 tools execute and match server major18/revision0004.
+Private encrypted directory, libpq files and distinct empty restore target remain
+unverified. No backup/restore execution or migration approval has been inferred.
+
+Identify the incident APK and authorize a dedicated test inbox. Review the
 existing Phase6 release procedure and Phase3 runbook. Obtain separate approval for
 an encrypted backup and restore drill against a verified disposable target, then
 application migrations0005→0006→0007. Obtain publication/Render deployment approval

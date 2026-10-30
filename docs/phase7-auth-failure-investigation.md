@@ -9,10 +9,13 @@ mail sending, live configuration change, deployment or application migration was
 ## Incident versus current reproducible evidence
 
 The user clarified that the 29 October failure occurred during registration after
-building/updating the phone application. The exact installed build ID, APK hash,
-embedded API URL, visible error and request ID have not been supplied for that
-incident. Whether the attempted request reached Render is unproven. Do not attribute
-that historical incident conclusively to a particular HTTP response or storage error.
+building/updating the phone application, then reported “request rejected404”, partial
+request ID `fc0e934f-...`, and source through Git `fc5838` (consistent with Phase5
+`fc58387401bcae9c874611718aeb280454ea5c52`). This user-reported HTTP404 supports
+the missing first-party registration endpoint/deployment mismatch as the incident's
+cause. It is not a newly captured request trace. Exact EAS build ID, APK hash,
+embedded URL and full request ID remain unverified; Render log correlation is pending.
+The separate browser SecureStore failure is not the phone incident diagnosis.
 The earlier downloaded Clerk-preview APK is not established as the later updated APK.
 
 The repository currently implements first-party auth. `AuthProvider` uses native
