@@ -1,5 +1,11 @@
 # Phase7 backup/restore preparation
 
+Phase7B refinement: use `phase7b-backup-restore-readiness.md`,
+`phase7b-private-operator-checklist.md` and `phase7b-backup-restore-execution-plan.md`
+for the latest gates and reviewed commands. The newly observed Alembic launcher
+Application Control4551 blocks migration execution pending administrator review.
+The earlier checks below remain historical evidence; no backup/restore was run.
+
 30 October2026, Asia/Calcutta. User explicitly approved backup/restore **preparation**.
 Actual application backup, restore, migration, deployment, mail activation and EAS
 build remain separately gated. No database contents were copied or changed.
