@@ -21,6 +21,32 @@ API_ROOT = Path(__file__).resolve().parents[3] / "services" / "api"
 sys.path.insert(0, str(API_ROOT))
 
 
+def failure_category(error):
+    """Return an allowlisted category, never exception text, SQL or connection data."""
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, socket.gaierror) or getattr(current, "errno", None) == 11001:
+            return "DNS_RESOLUTION"
+        if isinstance(current, (TimeoutError, subprocess.TimeoutExpired)):
+            return "TIMEOUT"
+        if isinstance(current, PermissionError):
+            return "PERMISSION"
+        if isinstance(current, ConnectionError):
+            return "CONNECTION"
+        current = getattr(current, "orig", None) or current.__cause__ or current.__context__
+    # Driver exceptions need not preserve the socket error as a cause. Classify
+    # their known types without exposing the message, which can contain a DSN.
+    from sqlalchemy.exc import DBAPIError
+
+    if isinstance(error, DBAPIError):
+        return "DATABASE"
+    if isinstance(error, OSError):
+        return "OPERATING_SYSTEM"
+    return "SETUP_OR_ASSERTION"
+
+
 class ControlledDelivery:
     """An explicit test sink; never sends real mail or exposes tokens via HTTP."""
 
@@ -70,6 +96,7 @@ def main():
     )
     created = False
     engine = server = thread = child = bound = None
+    stage = "CREATE_DISPOSABLE_DATABASE"
     try:
         with admin.connect() as connection:
             connection.execute(text(f'CREATE DATABASE "{name}"'))
@@ -81,13 +108,16 @@ def main():
             connect_args={"connect_timeout": 5, "options": "-c timezone=UTC"},
         )
         logging.disable(logging.CRITICAL)
+        stage = "CONNECT_DISPOSABLE_DATABASE"
         with engine.begin() as connection:
+            stage = "APPLY_INCREMENTAL_MIGRATIONS"
             migration = Config(str(API_ROOT / "alembic.ini"))
             migration.attributes["connection"] = connection
             command.upgrade(migration, "head")
             if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0007":
                 raise RuntimeError("Migration revision mismatch")
         print("Incremental migrations applied to disposable database: 0007", flush=True)
+        stage = "INITIALIZE_TEST_APPLICATION"
         settings = Settings(
             _env_file=None,
             app_env="testing",
@@ -110,6 +140,7 @@ def main():
         # Test searches select source=local; provider HTTP is additionally unavailable.
         app.state.food_providers = {}
         worker = EmailWorker(app.state.database, settings, delivery)
+        stage = "START_LOOPBACK_HTTP_SERVER"
         bound = socket.socket()
         bound.bind(("127.0.0.1", 0))
         bound.listen(128)
@@ -135,6 +166,7 @@ def main():
                 for word in ("TOKEN", "SECRET", "PASSWORD", "DATABASE", "API_KEY")
             )
         }
+        stage = "START_REAL_MOBILE_CLIENT"
         child = subprocess.Popen(
             [
                 node,
@@ -153,6 +185,7 @@ def main():
         timeout.start()
         passed = 0
         completed = False
+        stage = "EXECUTE_REAL_HTTP_CHECKPOINTS"
         try:
             for line in child.stdout:
                 event = json.loads(line)
@@ -224,9 +257,9 @@ def main():
             return 0
         finally:
             timeout.cancel()
-    except Exception:
+    except Exception as error:
         print(
-            "BLOCKED/FAILED: local integration setup or execution failed; "
+            f"BLOCKED/FAILED: stage={stage}; category={failure_category(error)}; "
             "sensitive details suppressed",
             flush=True,
         )

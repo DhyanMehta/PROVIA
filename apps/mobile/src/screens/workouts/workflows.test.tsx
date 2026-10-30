@@ -219,3 +219,34 @@ test("large workout analytics paginate sessions and personal records with bounde
   await screen.findByText("personal records: 21–40 of 45");
   await waitFor(() => expect(mockTransport.mock.calls.filter(([url]) => url.includes("/exercises/"))).toHaveLength(40));
 });
+
+test("an uncertain exercise save locks the retained form until reconciliation", async () => {
+  mockTransport.mockRejectedValue(new TypeError("Synthetic lost response"));
+  await render(<ExerciseFormScreen />);
+  await fireEvent.changeText(screen.getByLabelText("Exercise name"), "Recorded exercise");
+  await fireEvent.changeText(screen.getByLabelText("Primary muscle group"), "back");
+  await fireEvent.changeText(screen.getByLabelText("Equipment"), "cable");
+  await fireEvent.press(screen.getByText("Save exercise"));
+  await screen.findByText("Retry the same request");
+  for (const label of ["Exercise name", "Primary muscle group", "Equipment", "Instructions", "Optional demonstration HTTPS URL"])
+    expect(screen.getByLabelText(label).props.editable).toBe(false);
+});
+
+test("an uncertain plan save locks the submitted schedule draft", async () => {
+  mockTransport.mockRejectedValue(new TypeError("Synthetic lost response"));
+  await render(<PlanBuilderScreen />);
+  await fireEvent.changeText(await screen.findByLabelText("Plan name"), "Recorded week");
+  await fireEvent.press(screen.getByText("Save complete workout plan"));
+  await screen.findByText("Retry the same request");
+  expect(screen.getByLabelText("Plan name").props.editable).toBe(false);
+  expect(screen.getByLabelText("Plan description").props.editable).toBe(false);
+});
+
+test("an uncertain set write locks values while preserving the original reconciliation tuple", async () => {
+  mockTransport.mockRejectedValue(new TypeError("Synthetic lost response"));
+  await render(<SetEditor session={baseSession} exerciseId="exercise-1" exerciseName="Recorded exercise" onSaved={jest.fn()} onClose={jest.fn()} />);
+  await fireEvent.press(screen.getByText("Save set"));
+  await screen.findByText("Reload saved data to reconcile");
+  for (const label of ["Set number", "Repetitions", "Weight (kg)", "Set notes"])
+    expect(screen.getByLabelText(label).props.editable).toBe(false);
+});

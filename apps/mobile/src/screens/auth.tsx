@@ -92,7 +92,7 @@ export function Welcome() {
           Build a personal routine with secure access to your own progress.
         </Copy>
       </Card>
-      {error && <ErrorNote message={error} />}
+      {!!error && <ErrorNote message={error} />}
       {logoutPending && (
         <Action
           label={work.busy ? "Retrying sign-out…" : "Retry sign-out cleanup"}
@@ -134,7 +134,7 @@ export function Login() {
         maxLength={320}
       />
       <PasswordField label="Password" value={password} onChange={setPassword} />
-      {work.error && <ErrorNote message={work.error} />}
+      {!!work.error && <ErrorNote message={work.error} />}
       <Action
         label={work.busy ? "Signing in…" : "Sign in"}
         disabled={work.busy || !email || !password}
@@ -207,7 +207,7 @@ export function Register() {
         value={confirm}
         onChange={setConfirm}
       />
-      {work.error && <ErrorNote message={work.error} />}
+      {!!work.error && <ErrorNote message={work.error} />}
       <Action
         label={work.busy ? "Submitting request…" : "Create account"}
         disabled={work.busy}
@@ -286,7 +286,7 @@ function VerificationForm({ token }: { token: string }) {
         account was created or an email was delivered. Check spam, then request
         a new link if needed. Account enrollment may require support.
       </Copy>
-      {token && (
+      {!!token && (
         <Action
           label={work.busy ? "Verifying…" : "Confirm email verification"}
           disabled={work.busy}
@@ -318,8 +318,8 @@ function VerificationForm({ token }: { token: string }) {
         autoCorrect={false}
         maxLength={320}
       />
-      {message && <Copy>{message}</Copy>}
-      {work.error && <ErrorNote message={work.error} />}
+      {!!message && <Copy>{message}</Copy>}
+      {!!work.error && <ErrorNote message={work.error} />}
       <Action
         secondary
         label={
@@ -410,8 +410,8 @@ export function ForgotPassword() {
         autoCorrect={false}
         maxLength={320}
       />
-      {message && <Copy>{message}</Copy>}
-      {work.error && <ErrorNote message={work.error} />}
+      {!!message && <Copy>{message}</Copy>}
+      {!!work.error && <ErrorNote message={work.error} />}
       <Action
         label={
           work.busy
@@ -481,7 +481,7 @@ function ResetForm({ token }: { token: string }) {
             value={confirm}
             onChange={setConfirm}
           />
-          {work.error && <ErrorNote message={work.error} />}
+          {!!work.error && <ErrorNote message={work.error} />}
           <Action
             label={work.busy ? "Resetting…" : "Reset password"}
             disabled={work.busy}

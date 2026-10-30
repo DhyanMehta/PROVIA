@@ -193,3 +193,43 @@ test("Health Connect readiness never requests permissions or calls the backend",
   expect(screen.getByText("Never synced by this build")).toBeTruthy();
   expect(mockRequest).not.toHaveBeenCalled();
 });
+
+test("activity edits after a successful save restore draft protection", async () => {
+  await render(<ActivityScreen />);
+  await screen.findByText("No activity snapshot exists for this date.");
+  await fireEvent.changeText(screen.getByLabelText("Daily steps"), "5200");
+  await fireEvent.press(screen.getByText("Review full-day replacement"));
+  await fireEvent.press(screen.getByText("Save complete daily total"));
+  await screen.findByText("Complete daily activity saved.");
+  expect(mockPreventRemove.mock.calls.at(-1)?.[0]).toBe(false);
+  await fireEvent.changeText(screen.getByLabelText("Daily steps"), "6100");
+  expect(mockPreventRemove.mock.calls.at(-1)?.[0]).toBe(true);
+});
+
+test("changing the activity day requires explicit draft discard and keeps future drafts protected", async () => {
+  await render(<ActivityScreen />);
+  await screen.findByText("No activity snapshot exists for this date.");
+  await fireEvent.changeText(screen.getByLabelText("Daily steps"), "5200");
+  await fireEvent.changeText(screen.getByLabelText("Activity date (YYYY-MM-DD)"), "2026-10-20");
+  await fireEvent.press(screen.getByText("Show activity day"));
+  expect(screen.getByLabelText("Daily steps").props.value).toBe("5200");
+  await fireEvent.press(screen.getByText("Discard changes"));
+  expect(screen.getByLabelText("Daily steps").props.value).toBe("");
+  await fireEvent.changeText(screen.getByLabelText("Daily steps"), "1000");
+  expect(mockPreventRemove.mock.calls.at(-1)?.[0]).toBe(true);
+});
+
+test("cancelling a changed water edit confirms discard without removing another target draft", async () => {
+  const base = mockRequest.getMockImplementation()!;
+  mockRequest.mockImplementation(async (...args: unknown[]) => args[0] === "get" && args[1] === "/api/v1/water-logs" ? page([{ id: waterId, amount_ml: "250", consumed_at: "2026-10-29T08:00:00Z" }]) : base(...args));
+  await render(<WaterScreen />);
+  await fireEvent.press(await screen.findByText("Edit water entry"));
+  await fireEvent.changeText(screen.getByLabelText("Water amount (ml)"), "500");
+  await fireEvent.changeText(screen.getByLabelText("Target amount (ml)"), "2000");
+  await fireEvent.press(screen.getByText("Cancel water edit"));
+  expect(screen.getByLabelText("Water amount (ml)").props.value).toBe("500");
+  await fireEvent.press(screen.getByText("Discard changes"));
+  expect(screen.getByLabelText("Water amount (ml)").props.value).toBe("");
+  expect(screen.getByLabelText("Target amount (ml)").props.value).toBe("2000");
+  expect(mockPreventRemove.mock.calls.at(-1)?.[0]).toBe(true);
+});

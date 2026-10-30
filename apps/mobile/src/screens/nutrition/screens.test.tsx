@@ -78,6 +78,53 @@ test("scanner latches repeated barcode events into one lookup", async () => {
   mockPermission = { granted: true, canAskAgain: true }; let resolve: (food: unknown) => void = () => {}; mockRequest.mockImplementation(() => new Promise(done => { resolve = done; }));
   await render(<BarcodeScreen />); await fireEvent.press(screen.getByText("Start barcode scanner")); const camera = screen.getByTestId("camera-view"); await act(async () => { camera.props.onBarcodeScanned({ data: "0012345678901", type: "ean13" }); camera.props.onBarcodeScanned({ data: "0012345678901", type: "ean13" }); }); expect(mockRequest).toHaveBeenCalledTimes(1); await act(async () => resolve(mockFood)); expect(mockReplace).toHaveBeenCalledTimes(1);
 });
+
+test("camera mount failure leaves manual lookup available without uploading an image", async () => {
+  mockPermission = { granted: true, canAskAgain: true };
+  await render(<BarcodeScreen />);
+  await fireEvent.press(screen.getByText("Start barcode scanner"));
+  await act(async () => screen.getByTestId("camera-view").props.onMountError());
+  expect(screen.queryByTestId("camera-view")).toBeNull();
+  expect(screen.getByText(/Manual barcode lookup remains available/)).toBeTruthy();
+  await fireEvent.changeText(screen.getByLabelText("Barcode digits"), "0012345678901");
+  await fireEvent.press(screen.getByText("Look up barcode"));
+  await waitFor(() => expect(mockReplace).toHaveBeenCalled());
+  expect(mockRequest.mock.calls[0][0]).toBe("get");
+  expect(mockRequest.mock.calls[0][2]).not.toHaveProperty("body");
+});
+
+test("leaving the scanner aborts a pending lookup and prevents late navigation", async () => {
+  let resolve!: (food: unknown) => void;
+  mockRequest.mockImplementation(() => new Promise(done => { resolve = done; }));
+  const view = await render(<BarcodeScreen />);
+  await fireEvent.changeText(screen.getByLabelText("Barcode digits"), "0012345678901");
+  await fireEvent.press(screen.getByText("Look up barcode"));
+  const signal = mockRequest.mock.calls[0][2].signal as AbortSignal;
+  await view.unmount();
+  expect(signal.aborted).toBe(true);
+  await act(async () => resolve(mockFood));
+  expect(mockReplace).not.toHaveBeenCalled();
+});
+
+test("permanently denied camera offers settings and keeps the scanner unmounted", async () => {
+  mockPermission = { granted: false, canAskAgain: false };
+  await render(<BarcodeScreen />);
+  expect(screen.getByText("Open camera settings")).toBeTruthy();
+  expect(screen.queryByTestId("camera-view")).toBeNull();
+  expect(mockRequestPermission).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Look up barcode" }).props.accessibilityState.disabled).toBe(false);
+});
+
+test("barcode provider failure ends loading without inventing a product", async () => {
+  mockRequest.mockRejectedValue(new ApiError("Provider unavailable", 503, "PROVIDER_UNAVAILABLE"));
+  await render(<BarcodeScreen />);
+  await fireEvent.changeText(screen.getByLabelText("Barcode digits"), "0012345678901");
+  await fireEvent.press(screen.getByText("Look up barcode"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Look up barcode" }).props.accessibilityState.disabled).toBe(false));
+  expect(screen.getByLabelText("Barcode digits").props.value).toBe("0012345678901");
+  expect(mockReplace).not.toHaveBeenCalled();
+  expect(screen.queryByText("Create custom food")).toBeNull();
+});
 test("hardware removal keeps the custom-food draft until explicit discard", async () => {
   const repeat = jest.fn(); await render(<CustomFoodScreen />); await fireEvent.changeText(screen.getByLabelText("Food name"), "Unsaved food");
   await act(async () => mockPrevent?.({ repeat })); expect(screen.getByText("Discard this draft?")).toBeTruthy(); await fireEvent.press(screen.getByText("Cancel")); expect(repeat).not.toHaveBeenCalled(); expect(screen.getByLabelText("Food name").props.value).toBe("Unsaved food");
