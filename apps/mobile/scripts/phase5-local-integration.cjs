@@ -1,6 +1,6 @@
 /* Real source clients and real loopback HTTP. No HTTP handlers or fetch mocks. */
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const fs = require('node:fs');
 const readline = require('node:readline');
 const ts = require('typescript');
@@ -17,6 +17,8 @@ const trackingChecks = require('../src/screens/tracking/data.ts');
 const fitnessChecks = require('../src/lib/fitness-contracts.ts');
 const profileChecks = require('../src/lib/profile-values.ts');
 const { progressCheck } = require('../src/lib/progress-values.ts');
+const { createHealthSync, dayBounds } = require('../src/lib/health-connect/sync.ts');
+const { shiftDate } = require('../src/lib/form-values.ts');
 const lines = readline.createInterface({ input: process.stdin, terminal: false });
 const iterator = lines[Symbol.asyncIterator]();
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -251,6 +253,34 @@ async function expectFailure(operation, status) {
   const activeAfterProfile = (await get('/api/v1/onboarding')).active_goal;
   assert.equal(activeAfterProfile.id, applied.id);
   pass('Profile replacement retains fields without rewriting goal history');
+  // Controlled native-reader/storage boundaries only; coordinator, HTTP and DB are real.
+  const importedDay = shiftDate(date, -1);
+  const importedBounds = dayBounds(importedDay, 'Asia/Kolkata');
+  const importedStart = Date.parse(importedBounds.start);
+  const syncLedger = new Map();
+  const sourceId = randomUUID();
+  const deviceReadings = { steps: 2345,
+    weights: [{ source: 'health_connect', external_id: sourceId, weight_kg: '71.125', recorded_at: new Date(importedStart + 9 * 3600000).toISOString() }],
+    sleeps: [{ source: 'health_connect', external_id: sourceId, started_at: new Date(importedStart + 3600000).toISOString(), ended_at: new Date(importedStart + 8 * 3600000).toISOString(), stages: null }] };
+  const healthSync = createHealthSync({ accountId: 'controlled-account', api, current: () => true, now: () => now,
+    native: { availability: async () => 'available', permissions: async () => ['steps', 'weight', 'sleep'], request: async () => [], manage: async () => {}, read: async () => deviceReadings },
+    ledger: { get: async key => syncLedger.get(key) ?? null, set: async (key, value) => { syncLedger.set(key, value); } },
+    identity: async value => { const h = createHash('sha256').update(value).digest('hex'); return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`; } });
+  const imported = await healthSync.sync(importedDay, 'Asia/Kolkata', ['steps','weight','sleep'], new AbortController().signal);
+  assert.deepEqual(imported.map(row => row.state), ['saved','saved','saved']);
+  assert.deepEqual(imported.map(row => row.saved), [1,1,1]);
+  const replayed = await healthSync.sync(importedDay, 'Asia/Kolkata', ['steps','weight','sleep'], new AbortController().signal);
+  assert.deepEqual(replayed.map(row => row.skipped), [1,1,1]);
+  const importedDashboard = await get('/api/v1/dashboard/today', { query: { date: importedDay } });
+  assert.equal(importedDashboard.activity.steps, 2345);
+  assert.equal(importedDashboard.sleep.duration_seconds, 25200);
+  pass('Health sync coordinator persists controlled imports and repeats without duplicating records');
+  const weightReceipt = [...syncLedger.entries()].find(([key,value]) => key.includes('-') && value !== 'attempted' && !key.startsWith('activity') && key !== 'last-success');
+  assert.ok(weightReceipt);
+  await api.request('delete', '/api/v1/weight-logs/{weight_id}', { params: { weight_id: weightReceipt[1] } });
+  const suppressed = await healthSync.sync(importedDay, 'Asia/Kolkata', ['weight'], new AbortController().signal);
+  assert.equal(suppressed[0].state, 'conflict');
+  pass('Health sync suppresses recreation after an actual backend import deletion');
   await auth.signOut();
   assert.equal(auth.getSnapshot().user, null);
   assert.equal(persisted, null);

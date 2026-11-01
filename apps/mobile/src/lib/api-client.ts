@@ -111,7 +111,9 @@ export function errorMessage(error: unknown): string {
     EMAIL_NOT_VERIFIED: "Verify your email before opening your fitness data.",
   };
   const text =
-    specific[error.code] ??
+    (error.status === 404 && error.diagnostic?.route.startsWith("/api/v1/auth/")
+      ? "This server does not provide the required sign-in service. The app and backend versions may not match."
+      : undefined) ?? specific[error.code] ??
     (error.code === "EMAIL_UNAVAILABLE"
       ? "Email delivery is unavailable. Verification and password recovery are blocked until delivery is configured and working."
       : error.uncertainWrite

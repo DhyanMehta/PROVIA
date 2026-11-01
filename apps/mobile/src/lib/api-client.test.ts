@@ -1,5 +1,13 @@
 import { ApiError, createApiClient, errorMessage } from "./api-client";
 const base = "https://api.example.test/api/v1";
+
+test("missing auth endpoints identify deployment mismatch while retaining safe diagnostics", () => {
+  const failure = new ApiError("Not found", 404, "HTTP_404", "safe-id", false,
+    { method: "POST", route: "/api/v1/auth/register", phase: "http", durationMs: 10 });
+  expect(errorMessage(failure)).toContain("app and backend versions may not match");
+  expect(errorMessage(failure)).toContain("safe-id");
+  expect(errorMessage(new ApiError("Not found", 404))).toContain("This record is unavailable");
+});
 const response = (status: number, data: unknown = {}) =>
   ({
     ok: status >= 200 && status < 300,

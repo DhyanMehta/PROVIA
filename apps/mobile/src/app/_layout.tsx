@@ -25,6 +25,7 @@ function Navigation({ apiUrl }: { apiUrl: string }) {
           }}
         >
           <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="health-privacy" options={{ title: "Health Connect privacy" }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" options={{ title: "PROVIA" }} />
           <Stack.Protected guard={isSignedIn}>

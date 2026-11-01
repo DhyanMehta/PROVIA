@@ -1,6 +1,6 @@
-/** Build facts, not device capability detection. No native module is included yet. */
+/** Source integration facts, not a claim about the installed APK or device capability. */
 export const HEALTH_CONNECT_BUILD = Object.freeze({
-  nativeModuleIncluded: false,
+  nativeModuleIncluded: true,
   sdk58NativeCompatibilityVerified: false,
   deviceVerificationCompleted: false,
 });
@@ -22,7 +22,7 @@ export function healthConnectReadiness(): HealthConnectReadiness {
     canRead: false,
     canSync: false,
     lastSuccessfulSync: null,
-    reason: "The Health Connect native adapter is not included in this build. Expo SDK 58 / React Native 0.88 native compilation and Samsung device verification are pending.",
+    reason: "This source integrates the Health Connect native adapter. Expo SDK 58 / React Native 0.88 native compilation and Samsung device verification are pending; installed APK capability must be checked at runtime.",
   };
 }
 

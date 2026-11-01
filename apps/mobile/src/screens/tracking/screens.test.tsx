@@ -11,6 +11,8 @@ let mockParams: { weight_id?: string; session_id?: string } = {};
 const mockPreventRemove = jest.fn().mockReturnValue(jest.fn());
 const mockApi = { request: mockRequest };
 jest.mock("../../providers/api", () => ({ useApi: () => mockApi }));
+jest.mock("../../providers/auth", () => ({ useAuth: () => ({ userId: "00000000-0000-4000-8000-000000000001", session: { getGeneration: () => 1, getSnapshot: () => ({ user: { id: "00000000-0000-4000-8000-000000000001" } }) } }) }));
+jest.mock("../../lib/health-connect/native", () => ({ nativeHealth: { availability: jest.fn(), permissions: jest.fn(), request: jest.fn(), read: jest.fn(), manage: jest.fn() }, nativeLedger: () => ({ get: jest.fn().mockResolvedValue(null), set: jest.fn() }), receiptIdentity: jest.fn() }));
 jest.mock("expo-router", () => ({ router: { push: jest.fn(), replace: jest.fn() }, useLocalSearchParams: () => mockParams, usePreventRemove: (...args: unknown[]) => mockPreventRemove(...args) }));
 jest.mock("expo-crypto", () => ({ randomUUID: jest.fn(() => "00000000-0000-4000-8000-000000000099") }));
 jest.mock("@expo/ui", () => {
@@ -187,11 +189,14 @@ test("sleep history shows missing dates as unknown and actual recorded elapsed d
   expect(screen.getByText("No gaps are filled.", { exact: false })).toBeTruthy();
 });
 
-test("Health Connect readiness never requests permissions or calls the backend", async () => {
+test("Health Connect does not request native access or upload before explicit action", async () => {
   await render(<HealthConnectScreen />);
   expect(screen.getByText("Not checked")).toBeTruthy();
-  expect(screen.getByText("Never synced by this build")).toBeTruthy();
-  expect(mockRequest).not.toHaveBeenCalled();
+  expect(screen.getByText("Not recorded for this account")).toBeTruthy();
+  const native = require("../../lib/health-connect/native").nativeHealth;
+  expect(native.request).not.toHaveBeenCalled();
+  expect(native.read).not.toHaveBeenCalled();
+  expect(mockRequest.mock.calls.every(([method]) => method === "get")).toBe(true);
 });
 
 test("activity edits after a successful save restore draft protection", async () => {

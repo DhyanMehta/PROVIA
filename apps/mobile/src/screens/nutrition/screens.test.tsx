@@ -178,3 +178,45 @@ test.each(["meal", "recipe"])("dirty %s ingredient picker renders the active Bac
   await fireEvent.press(screen.getByText(kind === "meal" ? "Return to meal" : "Return to recipe"));
   expect(screen.getByLabelText(kind === "meal" ? "Notes" : "Recipe name").props.value).toBe(kind === "meal" ? "Retained note" : "Retained recipe");
 });
+
+test("household shortcuts are absent without a food-specific measured conversion", async () => {
+  await render(<FoodLog food={mockFood} />);
+  expect(screen.queryByLabelText("Quick measured count")).toBeNull();
+  expect(screen.getByLabelText("Grams")).toBeTruthy();
+});
+
+test.each([
+  ["roti", "37.125", "0.25", "9.281"],
+  ["roti", "37.125", "0.5", "18.563"],
+  ["phulka", "29", "1", "29.000"],
+  ["katori", "175", "1.5", "262.500"],
+  ["katori", "122.5", "2", "245.000"],
+  ["roti", "3.5E+1", "0.5", "17.500"],
+])("%s uses its own recorded %sg conversion for count%s", async (label, grams, count, expected) => {
+  const portionId = "10000000-0000-4000-8000-000000000003";
+  mockRequest.mockImplementation(async (method: string, path: string, options: any) => method === "post" ? mockMeal : { food_id: foodId, quantity_g: options?.query?.quantity_g ?? "100", ...nutrient });
+  await render(<FoodLog food={{ ...mockFood, portions: [{ id: portionId, label, grams }] }} />);
+  await fireEvent.changeText(screen.getByLabelText("Quantity unit"), portionId);
+  await fireEvent.changeText(screen.getByLabelText("Quick measured count"), count);
+  await waitFor(() => expect(mockRequest.mock.calls.some(call => call[0] === "get" && call[2]?.query?.quantity_g === expected)).toBe(true));
+  await fireEvent.press(screen.getByText("Log food"));
+  await waitFor(() => expect(mockReplace).toHaveBeenCalled());
+  const write = mockRequest.mock.calls.find(call => call[0] === "post");
+  expect(write?.[2].body.items).toEqual([{ food_id: foodId, portion_id: portionId, portion_count: count }]);
+  expect(write?.[2].body.items[0]).not.toHaveProperty("quantity_g");
+});
+
+test("switching to grams removes household shortcuts and uses the entered mass", async () => {
+  const portionId = "10000000-0000-4000-8000-000000000003";
+  mockRequest.mockImplementation(async (method: string, path: string, options: any) => method === "post" ? mockMeal : { food_id: foodId, quantity_g: options?.query?.quantity_g ?? "100", ...nutrient });
+  await render(<FoodLog food={{ ...mockFood, portions: [{ id: portionId, label: "glass", grams: "200" }] }} />);
+  await fireEvent.changeText(screen.getByLabelText("Quantity unit"), portionId);
+  await fireEvent.changeText(screen.getByLabelText("Quick measured count"), "0.5");
+  await fireEvent.changeText(screen.getByLabelText("Quantity unit"), "grams");
+  expect(screen.queryByLabelText("Quick measured count")).toBeNull();
+  await fireEvent.changeText(screen.getByLabelText("Grams"), "51.125");
+  await waitFor(() => expect(mockRequest.mock.calls.some(call => call[2]?.query?.quantity_g === "51.125")).toBe(true));
+  await fireEvent.press(screen.getByText("Log food"));
+  await waitFor(() => expect(mockReplace).toHaveBeenCalled());
+  expect(mockRequest.mock.calls.find(call => call[0] === "post")?.[2].body.items).toEqual([{ food_id: foodId, quantity_g: "51.125" }]);
+});

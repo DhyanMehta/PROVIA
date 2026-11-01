@@ -1,5 +1,6 @@
 import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
+import { Platform } from "react-native";
 import {
   Action,
   Card,
@@ -123,6 +124,7 @@ export function Login() {
     <Page>
       <Title eyebrow="Welcome back">Make room for you.</Title>
       <Copy>Sign in to your PROVIA account.</Copy>
+      {Platform.OS === "web" ? <Copy>Secure session storage is available in the Android app. Sign in there; this web preview cannot restore or save your session.</Copy> : null}
       <Field
         label="Email"
         value={email}
@@ -137,7 +139,7 @@ export function Login() {
       {!!work.error && <ErrorNote message={work.error} />}
       <Action
         label={work.busy ? "Signing in…" : "Sign in"}
-        disabled={work.busy || !email || !password}
+        disabled={Platform.OS === "web" || work.busy || !email || !password}
         onPress={() =>
           void work.run(async () => {
             await session.signIn(email.trim(), password);

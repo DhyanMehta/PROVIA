@@ -233,6 +233,21 @@ test("registration validates confirmation before requesting credentials", async 
   expect(mockPublicRequest).not.toHaveBeenCalled();
 });
 
+test("web login explains native storage requirement and never attempts unsupported persistence", async () => {
+  const { Platform } = require("react-native");
+  const original = Platform.OS;
+  Platform.OS = "web";
+  try {
+    mockAuth.isSignedIn = false;
+    await render(<Login />);
+    await fireEvent.changeText(screen.getByLabelText("Email"), "test@example.com");
+    await fireEvent.changeText(screen.getByLabelText("Password"), "synthetic password only");
+    expect(screen.getByText(/this web preview cannot restore or save/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" }).props.accessibilityState.disabled).toBe(true);
+    expect(mockSignIn).not.toHaveBeenCalled();
+  } finally { Platform.OS = original; }
+});
+
 test("dashboard renders server values and missing-data states without invented metrics", async () => {
   const grams = {
     target_g: "161.50000000",

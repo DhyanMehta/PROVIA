@@ -19,6 +19,11 @@
       },
       "predictiveBackGestureEnabled": true,
       "package": "com.provia.app",
+      "permissions": [
+        "android.permission.health.READ_STEPS",
+        "android.permission.health.READ_WEIGHT",
+        "android.permission.health.READ_SLEEP"
+      ],
       "versionCode": 1
     },
     "web": {
@@ -54,7 +59,9 @@
           "barcodeScannerEnabled": true
         }
       ],
-      "expo-font"
+      "expo-font",
+      "./plugins/with-health-privacy.cjs",
+      "react-native-health-connect"
     ],
     "experiments": {
       "typedRoutes": true
