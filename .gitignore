@@ -37,3 +37,4 @@ artifacts/phase7-e2e/
 Thumbs.db
 .idea/
 .vscode/
+.neon
