@@ -49,7 +49,9 @@ def test_https_delivery_uses_fixed_endpoint_and_one_time_mobile_link(purpose, ro
         assert body["to"] == ["recipient@example.com"]
         assert body["from"] == "PROVIA <sender@example.com>"
         assert body["subject"] == subject
-        assert f"provia:///{route}?token=test-only-action" in body["text"]
+        assert (
+            f"https://provia-mag7.onrender.com/auth/{route}#token=test-only-action" in body["text"]
+        )
         return httpx.Response(200, json={"id": "provider-message-id"})
 
     ResendDelivery(settings(), httpx.MockTransport(handle)).send(

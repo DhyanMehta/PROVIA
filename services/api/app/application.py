@@ -18,6 +18,7 @@ from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.db.session import Database
 from app.integrations.foods import OpenFoodFactsProvider, USDAProvider
 from app.modules.auth.email import create_delivery
+from app.modules.auth.handoff import router as auth_handoff_router
 from app.modules.auth.runner import ManagedEmailWorker
 
 
@@ -62,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "open_food_facts": OpenFoodFactsProvider(settings),
     }
     register_exception_handlers(application)
+    application.include_router(auth_handoff_router)
     application.include_router(router, prefix=settings.api_v1_prefix, responses=ERROR_RESPONSES)
     application.add_middleware(
         RequestBodyLimitMiddleware, max_bytes=settings.max_request_body_bytes

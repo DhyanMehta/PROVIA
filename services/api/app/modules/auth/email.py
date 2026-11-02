@@ -35,11 +35,13 @@ class Delivery(Protocol):
     def send(self, email: str, purpose: str, token: str, *, idempotency_key=None) -> None: ...
 
 
-def content(purpose: str, token: str) -> tuple[str, str]:
+def content(
+    purpose: str, token: str, base_url: str = "https://provia-mag7.onrender.com"
+) -> tuple[str, str]:
     subject = "PROVIA email verification" if purpose == "verify_email" else "PROVIA password reset"
     route = "verify-email" if purpose == "verify_email" else "reset-password"
     return subject, (
-        f"Open PROVIA using this one-time link:\nprovia:///{route}?token={token}\n"
+        f"Open PROVIA using this one-time link:\n{base_url}/auth/{route}#token={token}\n"
         "If you did not request it, ignore this message."
     )
 
@@ -67,7 +69,7 @@ class ResendDelivery:
 
     def send(self, email: str, purpose: str, token: str, *, idempotency_key=None):
         self.available()
-        subject, body = content(purpose, token)
+        subject, body = content(purpose, token, self.settings.auth_action_base_url)
         headers = {"Authorization": "Bearer " + self.settings.resend_api_key.get_secret_value()}
         if idempotency_key is not None:
             headers["Idempotency-Key"] = idempotency_key
@@ -123,7 +125,7 @@ class SmtpDelivery:
             message = EmailMessage()
             message["From"] = s.smtp_from
             message["To"] = email
-            message["Subject"], body = content(purpose, token)
+            message["Subject"], body = content(purpose, token, s.auth_action_base_url)
             message.set_content(body)
             context = ssl.create_default_context()
             if s.smtp_port == 465:

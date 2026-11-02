@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     direct_database_url: SecretStr | None = None
     auth_jwt_secret: SecretStr | None = None
     auth_token_issuer: str = "https://provia-mag7.onrender.com"
+    auth_action_base_url: str = "https://provia-mag7.onrender.com"
     auth_token_audience: str = "provia-mobile"
     auth_access_seconds: int = Field(default=900, ge=60, le=900)
     auth_refresh_days: int = Field(default=30, ge=1, le=30)
@@ -59,6 +60,29 @@ class Settings(BaseSettings):
     r2_access_key_id: SecretStr | None = None
     r2_secret_access_key: SecretStr | None = None
     r2_bucket_name: str | None = None
+
+    @field_validator("auth_action_base_url")
+    @classmethod
+    def validate_action_origin(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or "?" in value
+            or "#" in value
+            or "\\" in value
+            or "*" in value
+            or "%" in parsed.netloc
+            or parsed.netloc.endswith(":")
+            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError("AUTH_ACTION_BASE_URL must be an explicit HTTPS origin")
+        if parsed.port == 0:
+            raise ValueError("AUTH_ACTION_BASE_URL must use a valid HTTPS port")
+        return value
 
     @field_validator("api_v1_prefix")
     @classmethod
