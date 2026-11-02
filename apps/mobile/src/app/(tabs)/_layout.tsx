@@ -10,9 +10,10 @@ export default function FitnessTabs() {
         tabBarIcon: ({ color }) => <AppIcon name={icons[route.name]} color={typeof color === "string" ? color : undefined} size={22} />,
         tabBarLabelStyle: { fontSize: 10, fontFamily: "Inter_500Medium" },
         tabBarActiveTintColor: colors.accent,
+        tabBarInactiveTintColor: colors.muted,
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
-        tabBarStyle: { backgroundColor: colors.background },
+        tabBarStyle: { backgroundColor: colors.background, borderTopColor: colors.line },
       })}
     >
       <Tabs.Screen name="dashboard" options={{ title: "Today" }} />

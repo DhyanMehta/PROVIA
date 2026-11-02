@@ -46,7 +46,7 @@ export function HealthConnectScreen() {
   const syncNow = () => { void work(async () => { if (!runtime) return; const controller = new AbortController(); abort.current = controller; const outcome = await runtime.sync.sync(day, context.zone, selected, controller.signal); if (mounted.current && session.getGeneration() === generation && session.getSnapshot().user?.id === userId) { setResults(outcome); setLastSync(await runtime.ledger.get("last-success")); } }); };
   return <Page><Title eyebrow="Android integration">Health Connect</Title>
     <ReadStatus resource={context} />
-    <Card><Title>Your device, your choice</Title><Copy>Use a native Android build with Health Connect. Native compilation and device acceptance are pending for this source. No background reads or automatic uploads run.</Copy>
+    <Card><Title>Your device, your choice</Title><Copy>Connect Health Connect to import the categories you choose. Checks and imports happen only when you request them. No background reads or automatic uploads run.</Copy>
       <MetricRow label="Device availability" value={availability} /><MetricRow label="Last checked read permissions" value={permissions.length ? permissions.map(value => labels[value]).join(", ") : "None checked/granted"} />
       <MetricRow label="Last fully successful sync" value={lastSync ?? "Not recorded for this account"} />
       <Action label="Check availability and permissions" secondary disabled={busy} onPress={() => { void work(inspect); }} />
